@@ -36,6 +36,17 @@ from .ast_nodes import (
 
 # BUG-04 FIX: mapping of Module.function surface syntax → C function names
 # Populated from STDLIB_ACTION_FAMILIES in the stdlib module.
+# Element type -> the dictum_glist<suffix>_t variant defined by
+# DICTUM_GLIST_DEFINE in runtime/dictum_glist.h. Empty suffix is the
+# original int32_t list, kept as-is so existing code is unaffected.
+_GLIST_SUFFIX: Dict[str, str] = {
+    "whole number":   "",
+    "text":           "_text",
+    "decimal number": "_dec",
+    "truth value":    "_bool",
+    "byte":           "_byte",
+}
+
 _MODULE_CALL_MAP: Dict[str, str] = {
     "Text.to_number":         "dictum_text_to_int",
     "Text.grapheme_length":  "dictum_text_grapheme_length",
@@ -818,14 +829,21 @@ class CEmitter:
         # not a C array.
         if t.startswith('growable list of '):
             elem = t[len('growable list of '):].strip()
-            if elem != 'whole number':
+            # Typed variants (gap #9, second pass). Previously ONLY
+            # `whole number` was accepted here, which made dynamic
+            # collections a C-backend limitation rather than a language
+            # one -- C++ (std::vector) and Nim (seq) already supported
+            # every element type. runtime/dictum_glist.h now defines a
+            # real typed struct per element type via DICTUM_GLIST_DEFINE.
+            suffix = _GLIST_SUFFIX.get(elem)
+            if suffix is None:
                 raise NotImplementedError(
-                    f"'growable list of {elem}' is not yet supported -- this pass of "
-                    f"gap #9 (dynamic collections) only implemented 'growable list of "
-                    f"whole number'; use a fixed 'list of {elem}' instead, or extend "
-                    f"runtime/dictum_glist.h for this element type."
+                    f"'growable list of {elem}' is not supported -- supported "
+                    f"element types are: {', '.join(sorted(_GLIST_SUFFIX))}. "
+                    f"Add a DICTUM_GLIST_DEFINE line in runtime/dictum_glist.h "
+                    f"and an entry in _GLIST_SUFFIX to extend this."
                 )
-            return "dictum_glist_t"
+            return f"dictum_glist{suffix}_t"
 
         # Strip 'list of <type>' prefix form (MISSING-01 FIX)
         if t.startswith('list of '):
@@ -872,6 +890,21 @@ class CEmitter:
     # ------------------------------------------------------------------
     # BUG-04 FIX: resolve Module.function names
     # ------------------------------------------------------------------
+
+    def _glist_api(self, c_type: str):
+        """dictum_glist_t -> 'dictum_glist', dictum_glist_text_t ->
+        'dictum_glist_text'. Returns None if the type isn't a glist at all.
+        Call sites used to hardcode `dictum_glist_*`, which silently only
+        ever worked for the int32_t variant."""
+        if not isinstance(c_type, str):
+            return None
+        c_type = c_type.strip()
+        if c_type == "dictum_glist_t":
+            return "dictum_glist"
+        if c_type.startswith("dictum_glist") and c_type.endswith("_t"):
+            return c_type[:-2]
+        return None
+
     def _resolve_call_name(self, name: str) -> str:
         if '.' in name:
             return _MODULE_CALL_MAP.get(name, name.replace('.', '_'))
@@ -943,8 +976,9 @@ class CEmitter:
             return f"{node.obj}{op}{node.field}"
         elif isinstance(node, IndexAccess):
             idx = self.expr_to_c(node.index)
-            if self.declared_vars.get(node.collection) == "dictum_glist_t":
-                return f"dictum_glist_get(&{node.collection}, {idx})"
+            _api = self._glist_api(self.declared_vars.get(node.collection))
+            if _api:
+                return f"{_api}_get(&{node.collection}, {idx})"
             return f"{node.collection}[{idx}]"
         elif isinstance(node, MapGet):
             key_c = self.expr_to_c(node.key)
@@ -980,8 +1014,9 @@ class CEmitter:
                 # size local C array with no separate count variable).
                 if isinstance(node.operand, Identifier):
                     dv = self.declared_vars.get(node.operand.name)
-                    if dv == "dictum_glist_t":
-                        return f"(int)dictum_glist_len(&{node.operand.name})"
+                    _api = self._glist_api(dv)
+                    if _api:
+                        return f"(int){_api}_len(&{node.operand.name})"
                     if dv == "dictum_gset_t":
                         return f"(int)dictum_gset_len(&{node.operand.name})"
                     if dv == "dictum_map_t":
@@ -1398,7 +1433,7 @@ class CEmitter:
                         # to main(), same pattern as room_for/NewExpr
                         # globals just below.
                         self.emit(f"{ct} {stmt.name};  /* init deferred to main() */")
-                        self._main_inits.append(f"{stmt.name} = dictum_glist_new();")
+                        self._main_inits.append(f"{stmt.name} = {self._glist_api(self.type_to_c(stmt.type))}_new();")
                         continue
                     if self._is_gset_type(raw_type):
                         self.emit(f"{ct} {stmt.name};  /* init deferred to main() */")
@@ -1615,7 +1650,7 @@ class CEmitter:
                 # dynamic array, always starts genuinely empty (no
                 # uninitialized-memory C array here, unlike fixed lists).
                 self.declared_vars[node.name] = ct
-                self.emit(f"{ct} {node.name} = dictum_glist_new();")
+                self.emit(f"{ct} {node.name} = {self._glist_api(ct)}_new();")
                 return
             if self._is_gset_type(raw_type):
                 self.declared_vars[node.name] = ct
@@ -1742,7 +1777,7 @@ class CEmitter:
             if self.declared_vars.get(node.name) == "dictum_gset_t":
                 self.emit(f"dictum_gset_add(&{node.name}, {elem_c});")
             else:
-                self.emit(f"dictum_glist_add(&{node.name}, {elem_c});")
+                self.emit(f"{self._glist_api(self.declared_vars.get(node.name)) or 'dictum_glist'}_add(&{node.name}, {elem_c});")
             return
 
         # ----------------------------------------------------------------
@@ -1905,12 +1940,16 @@ class CEmitter:
             # emitter already uses for `item N of xs` indexing; the for-each
             # path simply never got it. C-specific -- C++ and Nim both
             # handled `for each` over a growable list correctly.
-            if self.declared_vars.get(node.collection) == "dictum_glist_t":
+            _api = self._glist_api(self.declared_vars.get(node.collection))
+            if _api:
+                _et = {"dictum_glist": "int32_t", "dictum_glist_text": "dictum_text",
+                       "dictum_glist_dec": "double", "dictum_glist_bool": "bool",
+                       "dictum_glist_byte": "uint8_t"}.get(_api, "int32_t")
                 self.emit(f"for (size_t __i = 0; __i < "
-                          f"dictum_glist_len(&{node.collection}); __i++) {{")
+                          f"{_api}_len(&{node.collection}); __i++) {{")
                 self.indent += 1
-                self.emit(f"int32_t {node.item} = "
-                          f"dictum_glist_get(&{node.collection}, __i);")
+                self.emit(f"{_et} {node.item} = "
+                          f"{_api}_get(&{node.collection}, __i);")
                 # A `for each` body need not reference the loop variable
                 # (`for each n in xs repeat` counting iterations, say).
                 # Without this the generated code trips

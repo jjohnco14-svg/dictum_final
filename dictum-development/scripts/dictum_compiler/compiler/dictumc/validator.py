@@ -152,7 +152,14 @@ class Validator:
             inner = base[len('growable list of '):].strip()
             if self.cpp_mode:
                 return self.is_valid_type(inner)
-            return inner == 'whole number'
+            # The C backend is no longer int32_t-only: runtime/dictum_glist.h
+            # now defines a real typed struct per element type via the
+            # DICTUM_GLIST_DEFINE macro (C has no generics, so the variants
+            # are generated rather than parameterised). Keep this list in
+            # sync with _GLIST_SUFFIX in emit_c.py and the
+            # DICTUM_GLIST_DEFINE lines in the runtime header.
+            return inner in ('whole number', 'text', 'decimal number',
+                             'truth value', 'byte')
         # `map of <K> to <V>` / `set of <T>` (gap #9). C++ accepts any
         # key/value/element type (real generics). The C backend now has
         # a real implementation too (runtime/dictum_map.h/dictum_gset.h),
@@ -547,7 +554,22 @@ class Validator:
             )
             return
         value_type = self.infer_type(node.value, scope)
-        if value_type and value_type != elem_type:
+        # Compare NORMALIZED type names. Dictum treats `decimal number`,
+        # `fractional number` and `decimal` as synonyms (this file's own
+        # header says so), but infer_type returns 'fractional number' for a
+        # float literal while a declaration says 'decimal number' -- so a
+        # plain string comparison rejected the perfectly valid
+        # `add 1.5 to <growable list of decimal number>`. Same for the
+        # bool/truth-value and int/whole-number spellings.
+        _syn = {
+            'fractional number': 'decimal number',
+            'decimal': 'decimal number',
+            'bool': 'truth value',
+            'int': 'whole number',
+            'number': 'whole number',
+        }
+        _norm = lambda x: _syn.get((x or '').strip(), (x or '').strip())
+        if value_type and _norm(value_type) != _norm(elem_type):
             self.error(
                 f"'add ... to {node.name}': expected a '{elem_type}' value "
                 f"(the collection's element type), got '{value_type}'",

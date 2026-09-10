@@ -2690,8 +2690,16 @@ def test_r42_growable_list(tmp):
         capture_output=True, text=True, timeout=15,
         cwd=os.path.dirname(os.path.abspath(__file__)),
     )
-    if r3.returncode == 0:
-        return False, "expected 'growable list of text' to be rejected (only whole number is implemented)"
+    # UPDATED: this used to assert `growable list of text` was REJECTED,
+    # encoding the old int32_t-only limitation of runtime/dictum_glist.h.
+    # That limitation was itself the bug -- C++ (std::vector) and Nim (seq)
+    # supported every element type, so dynamic collections were a C-backend
+    # restriction masquerading as a language one. The runtime now defines a
+    # real typed struct per element type via DICTUM_GLIST_DEFINE, so the
+    # correct assertion is the opposite: it must now WORK.
+    if r3.returncode != 0:
+        return False, (f"'growable list of text' should now compile on the C "
+                        f"backend (typed glist variants): {r3.stdout[-300:]}")
 
     bad_target = os.path.join(tmp, "bad_target.dict")
     open(bad_target, "w").write(

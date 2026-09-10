@@ -84,4 +84,59 @@ static inline void dictum_glist_free(dictum_glist_t *g) {
     g->cap = 0;
 }
 
+/* ---------------------------------------------------------------------
+ * TYPED VARIANTS (gap #9, second pass)
+ *
+ * The original dictum_glist_t hardcodes int32_t, so `growable list of
+ * text` / `of decimal number` / ... were rejected outright by the C
+ * backend -- while C++ (std::vector) and Nim (seq) supported them fine,
+ * making dynamic collections a C-only limitation rather than a language
+ * one. C has no generics, so define the same real API per element type
+ * via a macro. Each variant is a genuine typed struct with the identical
+ * amortized-growth behaviour, not a void* cast.
+ * ------------------------------------------------------------------ */
+#define DICTUM_GLIST_DEFINE(SUFFIX, T, ZERO)                                  \
+typedef struct { T *data; size_t len; size_t cap; } dictum_glist##SUFFIX##_t; \
+                                                                              \
+static inline dictum_glist##SUFFIX##_t dictum_glist##SUFFIX##_new(void) {     \
+    dictum_glist##SUFFIX##_t g; g.data = NULL; g.len = 0; g.cap = 0;          \
+    return g;                                                                 \
+}                                                                             \
+                                                                              \
+static inline void dictum_glist##SUFFIX##_add(                                \
+        dictum_glist##SUFFIX##_t *g, T value) {                               \
+    if (!g) return;                                                           \
+    if (g->len >= g->cap) {                                                   \
+        size_t ncap = g->cap ? g->cap * 2 : 4;                                \
+        T *nd = (T *)realloc(g->data, ncap * sizeof(T));                      \
+        if (!nd) { dictum_error_set("growable list: out of memory"); return; }\
+        g->data = nd; g->cap = ncap;                                          \
+    }                                                                         \
+    g->data[g->len] = value;                                                  \
+    g->len += 1;                                                              \
+}                                                                             \
+                                                                              \
+static inline T dictum_glist##SUFFIX##_get(                                   \
+        const dictum_glist##SUFFIX##_t *g, size_t index) {                    \
+    if (!g || index >= g->len) {                                              \
+        dictum_error_set("growable list: index out of bounds");               \
+        return ZERO;                                                          \
+    }                                                                         \
+    return g->data[index];                                                    \
+}                                                                             \
+                                                                              \
+static inline size_t dictum_glist##SUFFIX##_len(                              \
+        const dictum_glist##SUFFIX##_t *g) { return g ? g->len : 0; }         \
+                                                                              \
+static inline void dictum_glist##SUFFIX##_free(                               \
+        dictum_glist##SUFFIX##_t *g) {                                        \
+    if (!g) return;                                                           \
+    free(g->data); g->data = NULL; g->len = 0; g->cap = 0;                    \
+}
+
+DICTUM_GLIST_DEFINE(_text, dictum_text, NULL)
+DICTUM_GLIST_DEFINE(_dec,  double,      0.0)
+DICTUM_GLIST_DEFINE(_bool, bool,        false)
+DICTUM_GLIST_DEFINE(_byte, uint8_t,     0)
+
 #endif /* DICTUM_GLIST_H */
