@@ -149,6 +149,7 @@ are expected to still show as stub/missing.
 
 Usage: python3 run_selftest.py [--verbose]
 """
+import json
 import os
 import re
 import shutil
@@ -4501,6 +4502,126 @@ def test_r78_multifile_multilibrary(tmp):
     if len(set(outputs.values())) > 1:
         return False, f"backends DISAGREE: {outputs}"
     return True, f"ok -- 3 modules / 3 libraries identical across {sorted(outputs)}"
+
+
+@regression("R79 tools/libmanifest.py: the one-manifest-per-library system. "
+            "`emit` renders a manifest to .dict binding source, and `verify` "
+            "REALLY compiles+links+runs the manifest's own verify snippet on "
+            "each target before recording a verdict -- it must never record a "
+            "pass it did not observe. Guards the property that made it "
+            "valuable: on its first real use it found sdl2 and raylib were "
+            "silently broken on nim while passing on c/cpp")
+def test_r79_libmanifest_emit_and_verify(tmp):
+    lm = os.path.join(HERE, "tools", "libmanifest.py")
+    if not os.path.exists(lm):
+        return False, "tools/libmanifest.py missing"
+    if not os.path.exists("/usr/include/sqlite3.h"):
+        return None, "SKIP: libsqlite3-dev not available"
+
+    # emit: manifest -> .dict binding source
+    out_dict = os.path.join(tmp, "sqlite3_emitted.dict")
+    r = subprocess.run([sys.executable, lm, "emit", "sqlite3", "--out", out_dict],
+                       capture_output=True, text=True, timeout=60, cwd=HERE)
+    if r.returncode != 0:
+        return False, f"emit failed: {r.stdout}\n{r.stderr}"
+    text = open(out_dict).read()
+    if "import from C the action sqlite3_libversion" not in text:
+        return False, f"emitted binding missing its import line: {text[:300]!r}"
+
+    # verify: must genuinely build+run on each requested target
+    targets = "c,cpp" + (",nim" if shutil.which("nim") else "")
+    r2 = subprocess.run([sys.executable, lm, "verify", "sqlite3", "--targets", targets],
+                        capture_output=True, text=True, timeout=600, cwd=HERE)
+    if r2.returncode != 0:
+        return False, f"verify reported failure: {r2.stdout[-500:]}"
+    for t in targets.split(","):
+        if f"{t}: PASS" not in r2.stdout:
+            return False, f"target {t} did not PASS: {r2.stdout[-400:]}"
+
+    # A manifest whose verify snippet CANNOT pass must be reported as FAIL.
+    # Without this the whole tool is decorative -- see R62/R66 for the same
+    # "prove the check can fail" discipline applied elsewhere.
+    man_dir = os.path.join(HERE, "blessed", "manifests")
+    bogus = os.path.join(man_dir, "_selftest_bogus.json")
+    try:
+        m = json.load(open(os.path.join(man_dir, "sqlite3.json")))
+        m["library"] = "_selftest_bogus"
+        m["verify"]["expect_regex"] = "THIS_CAN_NEVER_MATCH_XYZZY"
+        json.dump(m, open(bogus, "w"), indent=2)
+        r3 = subprocess.run([sys.executable, lm, "verify", "_selftest_bogus",
+                             "--targets", "c"],
+                            capture_output=True, text=True, timeout=180, cwd=HERE)
+        if "c: PASS" in r3.stdout:
+            return False, ("a manifest whose expect_regex can never match was "
+                            "reported as PASS -- verify is not actually checking output")
+    finally:
+        if os.path.exists(bogus):
+            os.remove(bogus)
+    return True, f"ok -- emit + verify genuine on {targets}"
+
+
+@regression("R80 tools/dictation.py: the gated procedure for adding new "
+            "grammar. proposed -> check (COMPATIBILITY) -> compatible -> "
+            "test (FUNCTIONALITY) -> working. The two gates must be "
+            "INDEPENDENT: `check` passing must NOT make a dictation usable, "
+            "since compatibility is not function. Verifies (a) a keyword "
+            "that already exists is rejected by check, (b) a genuinely new "
+            "keyword passes check, and (c) that same unimplemented keyword "
+            "still FAILS the functionality gate on all three backends")
+def test_r80_dictation_gated_procedure(tmp):
+    dc = os.path.join(HERE, "tools", "dictation.py")
+    if not os.path.exists(dc):
+        return False, "tools/dictation.py missing"
+    d_dir = os.path.join(HERE, "dictations")
+    created = []
+
+    def run_d(*argv, timeout=300):
+        return subprocess.run([sys.executable, dc, *argv],
+                              capture_output=True, text=True, timeout=timeout, cwd=HERE)
+
+    try:
+        # (a) collision with an existing keyword must FAIL the check gate
+        ex = os.path.join(tmp, "ex.dict")
+        open(ex, "w").write('program p\n    print the text "x"\nend program\n')
+        name_a = "_selftest_collide"
+        created.append(name_a)
+        r = run_d("propose", name_a, "--syntax", "while X repeat ... end while",
+                  "--description", "collides on purpose", "--keywords", "while",
+                  "--example", ex, "--expect", "x")
+        if r.returncode != 0:
+            return False, f"propose(collide) failed: {r.stdout}\n{r.stderr}"
+        r = run_d("check", name_a, "--skip-suite")
+        if "already exists" not in r.stdout:
+            return False, (f"check did not reject a keyword that already exists "
+                            f"in grammar.py KEYWORDS: {r.stdout[-300:]!r}")
+
+        # (b) a genuinely new keyword should PASS the compatibility gate,
+        # and (c) still FAIL the functionality gate because nothing
+        # implements it. That gap is the whole point of two gates.
+        name_b = "_selftest_newkw"
+        created.append(name_b)
+        ex2 = os.path.join(tmp, "ex2.dict")
+        open(ex2, "w").write(
+            'program p\n    zzblorp x is 1 then\n        print the text "y"\n'
+            '    end zzblorp\nend program\n')
+        r = run_d("propose", name_b, "--syntax", "zzblorp ... end zzblorp",
+                  "--description", "deliberately unimplemented",
+                  "--keywords", "zzblorp", "--example", ex2, "--expect", "y")
+        if r.returncode != 0:
+            return False, f"propose(new) failed: {r.stdout}\n{r.stderr}"
+        r = run_d("check", name_b, "--skip-suite")
+        if "state -> compatible" not in r.stdout:
+            return False, f"new keyword failed the check gate: {r.stdout[-300:]!r}"
+        r = run_d("test", name_b, timeout=600)
+        if "state -> failed" not in r.stdout or "NOT usable" not in r.stdout:
+            return False, ("an UNIMPLEMENTED dictation passed the functionality "
+                            f"gate -- the gates are not independent: {r.stdout[-400:]!r}")
+    finally:
+        for n in created:
+            f = os.path.join(d_dir, f"{n}.json")
+            if os.path.exists(f):
+                os.remove(f)
+    return True, "ok -- collision rejected; check and test gates genuinely independent"
 
 
 if __name__ == "__main__":

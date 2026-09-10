@@ -121,7 +121,10 @@ def type_vocabulary() -> set:
 # Gate 1 -- COMPATIBILITY
 # ---------------------------------------------------------------------------
 
-def gate_check(spec: dict) -> "tuple[bool, list]":
+def gate_check(spec: dict, run_suite: bool = True) -> "tuple[bool, list]":
+    """run_suite=False exists so the regression suite can exercise this gate
+    without recursing: `check` normally runs run_selftest.py, and
+    run_selftest.py testing `check` would then re-enter itself forever."""
     findings = []
     kws = existing_keywords()
     types = type_vocabulary()
@@ -166,6 +169,9 @@ def gate_check(spec: dict) -> "tuple[bool, list]":
 
     # The existing suite must still pass. A dictation that breaks what
     # already works is not compatible, whatever else is true about it.
+    if not run_suite:
+        findings.append(("OK", "regression suite check skipped (--skip-suite)"))
+        return (not any(k == "FAIL" for k, _ in findings)), findings
     try:
         r = subprocess.run([sys.executable, SELFTEST], capture_output=True,
                            text=True, timeout=1800, cwd=COMPILER_DIR)
@@ -301,7 +307,7 @@ def cmd_propose(args) -> int:
 def cmd_check(args) -> int:
     spec = load(args.name)
     print(f"COMPATIBILITY gate for '{args.name}' -- can this dictation exist here?\n")
-    ok, findings = gate_check(spec)
+    ok, findings = gate_check(spec, run_suite=not args.skip_suite)
     report(findings)
     spec["check_findings"] = findings
     spec["state"] = "compatible" if ok else "failed"
@@ -352,7 +358,11 @@ def main() -> int:
     pp.add_argument("--link", nargs="*")
     pp.set_defaults(func=cmd_propose)
 
-    pc = sub.add_parser("check"); pc.add_argument("name"); pc.set_defaults(func=cmd_check)
+    pc = sub.add_parser("check"); pc.add_argument("name")
+    pc.add_argument("--skip-suite", action="store_true",
+                    help="skip the run_selftest.py step (used by the regression "
+                         "suite itself, to avoid infinite recursion)")
+    pc.set_defaults(func=cmd_check)
     pt = sub.add_parser("test");  pt.add_argument("name"); pt.set_defaults(func=cmd_test)
     ps = sub.add_parser("show");  ps.add_argument("name"); ps.set_defaults(func=cmd_show)
 
