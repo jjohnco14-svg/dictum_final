@@ -165,12 +165,22 @@ def build_and_run(lib: str, dict_src: str, workdir: str) -> subprocess.Completed
     return subprocess.run([out_bin], capture_output=True, text=True, timeout=15, env=env)
 
 
-def smoke_test(lib: str) -> bool:
+def smoke_test(lib: str) -> "tuple[bool, str]":
+    """Returns (passed, reason). On failure the reason carries the real
+    compiler/linker/runtime error -- a silent 0/1 verdict turns a broken
+    environment into an all-zero campaign that looks like 'found nothing'
+    when it actually means 'ran nothing'."""
     try:
         r = build_and_run(lib, LIBRARIES[lib]["dict"], f"/tmp/bl_smoke_{lib}")
-        return r.returncode == 0 and bool(re.search(LIBRARIES[lib]["expect"], r.stdout))
-    except Exception:
-        return False
+    except Exception as e:
+        return False, f"exception: {e}"
+    if r.returncode != 0:
+        err = ((r.stderr or "") + (r.stdout or "")).strip()
+        return False, f"exit {r.returncode}: {err[-400:]}"
+    if not re.search(LIBRARIES[lib]["expect"], r.stdout):
+        return False, (f"ran but output didn't match {LIBRARIES[lib]['expect']!r}: "
+                        f"{r.stdout[-200:]!r}")
+    return True, "ok"
 
 
 def mutate(seed: str, rng: random.Random) -> str:
@@ -214,10 +224,15 @@ def main() -> int:
         time.sleep(2)
 
     enabled = {}
+    skip_reasons = {}
     for lib in LIBRARIES:
-        ok = smoke_test(lib)
+        ok, reason = smoke_test(lib)
         enabled[lib] = ok
-        print(f"SMOKE TEST -- {lib}: {int(ok)}", flush=True)
+        if not ok:
+            skip_reasons[lib] = reason
+            print(f"SMOKE TEST -- {lib}: 0  SKIPPED because: {reason}", flush=True)
+        else:
+            print(f"SMOKE TEST -- {lib}: 1", flush=True)
 
     findings_dir = os.path.join(HERE, "blessed_findings")
     os.makedirs(findings_dir, exist_ok=True)
@@ -232,7 +247,13 @@ def main() -> int:
 
     active_libs = [lib for lib, ok in enabled.items() if ok]
     if not active_libs:
-        print("no libraries passed their smoke test -- nothing to fuzz", flush=True)
+        print("NO LIBRARIES PASSED THEIR SMOKE TEST -- nothing was fuzzed.", flush=True)
+        print("This is an ENVIRONMENT problem, not a clean result. Reasons:", flush=True)
+        for lib, why in skip_reasons.items():
+            print(f"  {lib}: {why}", flush=True)
+        open(summary_path, "w").write(json.dumps(
+            {"error": "all libraries skipped -- environment problem, NOT a clean run",
+             "skip_reasons": skip_reasons}, indent=2))
         if xvfb_proc:
             xvfb_proc.terminate()
         return 0
@@ -261,12 +282,14 @@ def main() -> int:
         if elapsed - last_heartbeat > 30:
             last_heartbeat = elapsed
             summary = {"elapsed_seconds": int(elapsed), "total_runs": total,
-                       "findings_count": findings, "enabled": enabled, "counts": counts}
+                       "findings_count": findings, "enabled": enabled,
+                       "skip_reasons": skip_reasons, "counts": counts}
             open(summary_path, "w").write(json.dumps(summary, indent=2))
             print(f"--- progress --- {json.dumps(summary)}", flush=True)
 
     summary = {"elapsed_seconds": int(time.time() - start), "total_runs": total,
-               "findings_count": findings, "enabled": enabled, "counts": counts}
+               "findings_count": findings, "enabled": enabled,
+                       "skip_reasons": skip_reasons, "counts": counts}
     open(summary_path, "w").write(json.dumps(summary, indent=2))
     print(f"DONE {json.dumps(summary)}", flush=True)
     if xvfb_proc:

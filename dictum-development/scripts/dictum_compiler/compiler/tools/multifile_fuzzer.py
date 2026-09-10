@@ -59,7 +59,7 @@ end program
 '''
 
 
-def smoke_test(backend: str) -> bool:
+def smoke_test(backend: str) -> "tuple[bool, str]":
     """Build + run the KNOWN-good project once. Only a backend that passes
     this gets used for the real campaign -- same discipline as bughunter.dict,
     so a missing/broken toolchain shows up as a clean skip, never a false
@@ -76,14 +76,16 @@ def smoke_test(backend: str) -> bool:
             capture_output=True, text=True, timeout=60,
         )
         if r.returncode != 0:
-            return False
+            return False, f"project_builder failed: {((r.stderr or '') + (r.stdout or ''))[-400:]}"
         r2 = subprocess.run(["make"], capture_output=True, text=True, timeout=60, cwd=out)
         if r2.returncode != 0:
-            return False
+            return False, f"make failed: {((r2.stderr or '') + (r2.stdout or ''))[-400:]}"
         r3 = subprocess.run([os.path.join(out, "main")], capture_output=True, text=True, timeout=10)
-        return "pid:" in r3.stdout
-    except Exception:
-        return False
+        if "pid:" not in r3.stdout:
+            return False, f"ran but output wrong: {r3.stdout[-200:]!r}"
+        return True, "ok"
+    except Exception as e:
+        return False, f"exception: {e}"
 
 
 def mutate(seed: str, rng: random.Random) -> str:
@@ -125,10 +127,18 @@ def main() -> int:
 
     print(f"multifile_fuzzer.py starting, duration={duration}s", flush=True)
     enabled = {}
+    skip_reasons = {}
     for backend in ("c", "cpp"):
-        ok = smoke_test(backend)
+        ok, reason = smoke_test(backend)
         enabled[backend] = ok
-        print(f"SMOKE TEST -- {backend}: {int(ok)}", flush=True)
+        if not ok:
+            skip_reasons[backend] = reason
+            print(f"SMOKE TEST -- {backend}: 0  SKIPPED because: {reason}", flush=True)
+        else:
+            print(f"SMOKE TEST -- {backend}: 1", flush=True)
+    if not any(enabled.values()):
+        print("NO BACKENDS PASSED -- nothing was fuzzed. This is an ENVIRONMENT "
+              "problem, not a clean result.", flush=True)
 
     findings_dir = os.path.join(HERE, "multifile_findings")
     os.makedirs(findings_dir, exist_ok=True)
@@ -181,13 +191,13 @@ def main() -> int:
             last_heartbeat = elapsed
             summary = {
                 "elapsed_seconds": int(elapsed), "total_runs": total,
-                "findings_count": findings, "counts": counts,
+                "findings_count": findings, "skip_reasons": skip_reasons, "counts": counts,
             }
             open(summary_path, "w").write(json.dumps(summary, indent=2))
             print(f"--- progress --- {json.dumps(summary)}", flush=True)
 
     summary = {"elapsed_seconds": int(time.time() - start), "total_runs": total,
-               "findings_count": findings, "counts": counts}
+               "findings_count": findings, "skip_reasons": skip_reasons, "counts": counts}
     open(summary_path, "w").write(json.dumps(summary, indent=2))
     print(f"DONE {json.dumps(summary)}", flush=True)
     return 0
