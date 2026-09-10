@@ -251,10 +251,12 @@ static int run_capture(const char *cmd, char *out, size_t cap) {
 
 int main(int argc, char **argv) {
     long seconds = 60;
+    long want_count = 0;   /* 0 = time-based; >0 = run exactly N programs */
     const char *workdir = "/tmp/progforge_work";
     const char *compiler_dir = "..";
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--seconds") && i + 1 < argc) seconds = atol(argv[++i]);
+        else if (!strcmp(argv[i], "--count") && i + 1 < argc) want_count = atol(argv[++i]);
         else if (!strcmp(argv[i], "--workdir") && i + 1 < argc) workdir = argv[++i];
         else if (!strcmp(argv[i], "--compiler") && i + 1 < argc) compiler_dir = argv[++i];
     }
@@ -268,12 +270,15 @@ int main(int argc, char **argv) {
     const char *backends[3] = {"c", "cpp", "nim"};
     time_t start = time(NULL);
 
-    printf("progforge: generating real Dictum programs for %lds\n", seconds);
+    if (want_count > 0)
+        printf("progforge: generating exactly %ld real Dictum programs\n", want_count);
+    else
+        printf("progforge: generating real Dictum programs for %lds\n", seconds);
     printf("           (verifies CORRECTNESS against self-computed expected output,\n");
     printf("            not merely that the compilers didn't crash)\n");
     fflush(stdout);
 
-    while (time(NULL) - start < seconds) {
+    while (want_count > 0 ? (total < want_count) : (time(NULL) - start < seconds)) {
         Program p;
         generate(&p);
 
