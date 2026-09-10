@@ -4715,6 +4715,30 @@ def test_r81_real_sqlite_app(tmp):
     return True, f"ok -- real app identical on {sorted(outputs)}, db verified"
 
 
+@regression("R82 header-completeness INVARIANT (a whole bug CLASS, not one "
+            "bug): every action DEFINED in a module's generated source must "
+            "be DECLARED in that module's generated header. generate_header "
+            "matches return types against a hardcoded whitelist, so any type "
+            "not on it vanishes silently -- callers get an implicit-int "
+            "declaration. Three separate instances of this were found one at "
+            "a time (text, opaque pointer, byte); tools/header_completeness.py "
+            "checks every type in the vocabulary at once, including types "
+            "added later")
+def test_r82_header_completeness(tmp):
+    tool = os.path.join(HERE, "tools", "header_completeness.py")
+    if not os.path.exists(tool):
+        return False, "tools/header_completeness.py missing"
+    r = subprocess.run([sys.executable, tool], capture_output=True,
+                       text=True, timeout=600, cwd=HERE)
+    if r.returncode != 0:
+        missing = [l.strip() for l in r.stdout.splitlines() if "MISSING" in l]
+        return False, ("header-completeness invariant violated -- a return "
+                        f"type is missing from generate_header's whitelist: {missing}")
+    if "invariant holds" not in r.stdout:
+        return False, f"unexpected output: {r.stdout[-300:]}"
+    return True, "ok -- every type in the vocabulary survives header generation"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 
