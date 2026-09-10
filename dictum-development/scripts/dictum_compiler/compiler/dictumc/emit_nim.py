@@ -309,6 +309,18 @@ class NimEmitter:
             def _bool_side(n):
                 return (isinstance(n, Identifier)
                         and self.declared_vars.get(n.name, "") == "bool")
+            # Integer division: Dictum's `divided by` on whole numbers means
+            # INTEGER division, which is what C and C++ do with `/` on ints.
+            # Nim's `/` is always FLOAT division, so the same program either
+            # fails to compile ("got 'float' but expected 'int32'") or would
+            # silently produce a different value. The parser rewrites
+            # `divided by` to `/` before the emitter sees it, so the
+            # "divided by" -> "div" entry in _BIN_OP_MAP never fires; decide
+            # here from the operand types instead. Found by writing a real
+            # sqlite3-backed app that averaged a total over a count.
+            if op == "/" and not (self._is_float_expr(node.left)
+                                  or self._is_float_expr(node.right)):
+                op = "div"
             if op in ("==", "!="):
                 if _bool_side(node.left) and right in ("0", "1"):
                     right = "true" if right == "1" else "false"

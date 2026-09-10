@@ -1,0 +1,33 @@
+program main
+
+    use notestore
+
+    keep db as opaque pointer with no value
+    call notestore.open_store with "notes.db" giving db
+
+    keep rc as whole number with value 0
+    call notestore.init_schema with db giving rc
+    call notestore.add_note with db and "DELETE FROM notes" giving rc
+
+    call notestore.add_note with db and "INSERT INTO notes (body, weight) VALUES ('buy milk', 3)" giving rc
+    call notestore.add_note with db and "INSERT INTO notes (body, weight) VALUES ('ship compiler', 8)" giving rc
+    call notestore.add_note with db and "INSERT INTO notes (body, weight) VALUES ('write tests', 5)" giving rc
+
+    keep n as whole number with value 0
+    call notestore.count_notes with db giving n
+    print the text "notes=" and n
+
+    keep w as whole number with value 0
+    call notestore.total_weight with db giving w
+    print the text "weight=" and w
+
+    keep avg as whole number with value 0
+    if n is greater than 0 then
+        put w divided by n into avg
+    end if
+    print the text "avg=" and avg
+
+    call notestore.close_store with db giving rc
+    print the text "closed=" and rc
+
+end program

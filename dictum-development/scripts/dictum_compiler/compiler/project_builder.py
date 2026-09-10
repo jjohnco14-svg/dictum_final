@@ -168,8 +168,17 @@ def generate_header(module_name: str, c_source: str, dict_source: str) -> str:
     # `dictum_\w+` covers the other runtime typedefs (dictum_glist_t and
     # friends) for the same reason.
     fn_pattern = re.compile(
-        r'^((?:int32_t|double|bool|void|const char\*|size_t|uint8_t\*|uint64_t'
-        r'|int64_t|dictum_text|dictum_\w+\*?)\s+'
+        # NOTE the `\*?` on void/size_t/int64_t etc: an action returning
+        # `opaque pointer` emits `void* name(...)`, and a whitelist entry of
+        # bare `void` followed by `\s+` does NOT match `void*`. That silently
+        # dropped every pointer-returning action from its module header --
+        # callers saw no declaration, which C treats as implicit int, giving
+        # "assignment to 'void *' from 'int'". Exactly the same failure mode
+        # as the missing dictum_text entry: the int32_t actions in the same
+        # module were declared correctly, so only a module exporting BOTH
+        # shapes reveals it. Found by writing a real sqlite3-backed app.
+        r'^((?:int32_t|double|bool|void\*?|const char\*|size_t\*?|uint8_t\*?|uint64_t'
+        r'|int64_t\*?|dictum_text|dictum_\w+\*?)\s*\*?\s+'
         r'\w+\s*\([^)]*\))\s*\{',
         re.MULTILINE
     )

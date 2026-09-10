@@ -4624,6 +4624,97 @@ def test_r80_dictation_gated_procedure(tmp):
     return True, "ok -- collision rejected; check and test gates genuinely independent"
 
 
+@regression("R81 DOGFOOD: a real SQLite-backed notes application written in "
+            "Dictum -- a module wrapping a C shim, a program using it, real "
+            "INSERT/COUNT/SUM against a real database file -- built and run "
+            "on all three backends with identical output, and the resulting "
+            "database independently verified. Writing it found two real bugs "
+            "no synthetic test had: (1) an action returning `opaque pointer` "
+            "emits `void* f(...)`, and generate_header's return-type "
+            "whitelist matched bare `void` followed by whitespace, so EVERY "
+            "pointer-returning action was silently dropped from its module "
+            "header (implicit-int at the call site) -- same failure family "
+            "as the earlier missing dictum_text entry; (2) `divided by` on "
+            "whole numbers is INTEGER division in C/C++ but Nim's `/` is "
+            "always FLOAT, so the same program failed to compile on Nim "
+            "(the parser rewrites `divided by` to `/` before the emitter, "
+            "so _BIN_OP_MAP's div entry never fired)")
+def test_r81_real_sqlite_app(tmp):
+    src_dir = os.path.join(HERE, "tests", "notesapp")
+    if not os.path.isdir(src_dir):
+        return None, "SKIP: tests/notesapp fixtures not present"
+    if not os.path.exists("/usr/include/sqlite3.h"):
+        return None, "SKIP: libsqlite3-dev not available"
+    work = os.path.join(tmp, "notesapp")
+    shutil.copytree(src_dir, work)
+
+    shim_o = os.path.join(work, "sqlite_shim.o")
+    rc = subprocess.run(["gcc", "-c", os.path.join(work, "sqlite_shim.c"), "-o", shim_o],
+                        capture_output=True, text=True, timeout=60)
+    if rc.returncode != 0:
+        return False, f"shim failed to compile: {rc.stderr[-300:]}"
+
+    outputs = {}
+    for backend in ("c", "cpp", "nim"):
+        if backend == "nim" and shutil.which("nim") is None:
+            continue
+        for stale in ("dictum.project.json", "notes.db"):
+            f = os.path.join(work, stale)
+            if os.path.exists(f):
+                os.remove(f)
+        out_dir = os.path.join(work, f"build_{backend}")
+        r = subprocess.run(
+            [sys.executable, PROJECT_BUILDER, work, "--backend", backend,
+             "--out", out_dir, "--link", "sqlite3"],
+            capture_output=True, text=True, timeout=180, cwd=HERE)
+        if r.returncode != 0:
+            return False, f"[{backend}] build failed: {r.stdout}\n{r.stderr}"
+
+        if backend == "nim":
+            sh = os.path.join(out_dir, "build.sh")
+            # object file must precede -lsqlite3 for the linker to resolve it
+            txt = open(sh).read().replace(
+                "--passL:-lsqlite3", f"--passL:{shim_o} --passL:-lsqlite3")
+            open(sh, "w").write(txt)
+            rb = subprocess.run(["sh", sh], capture_output=True, text=True,
+                                 timeout=420, cwd=out_dir)
+        else:
+            mf = os.path.join(out_dir, "Makefile")
+            txt = re.sub(r"^OBJS     = ", f"OBJS     = {shim_o} ",
+                          open(mf).read(), flags=re.MULTILINE)
+            open(mf, "w").write(txt)
+            rb = subprocess.run(["make"], capture_output=True, text=True,
+                                 timeout=180, cwd=out_dir)
+        if rb.returncode != 0:
+            return False, (f"[{backend}] compile/link failed: "
+                            f"{rb.stdout[-400:]}\n{rb.stderr[-400:]}")
+        # cwd matters: the program opens "notes.db" relative to it.
+        run = _run(os.path.join(out_dir, "main"), timeout=30, cwd=out_dir)
+        if run.returncode != 0:
+            return False, f"[{backend}] binary exited {run.returncode}"
+        outputs[backend] = "".join(run.stdout.split())
+
+    for expect in ("notes=3", "weight=16", "avg=5", "closed=0"):
+        for b, o in outputs.items():
+            if expect not in o:
+                return False, f"[{b}] missing {expect!r} in {o!r}"
+    if len(set(outputs.values())) > 1:
+        return False, f"backends DISAGREE on a real app: {outputs}"
+
+    # The program writes notes.db relative to its cwd, i.e. into whichever
+    # build dir it ran from. Verify the LAST backend's database.
+    last_backend = sorted(outputs)[-1]
+    db = os.path.join(work, f"build_{last_backend}", "notes.db")
+    if not os.path.exists(db):
+        return False, ("the program reported success but wrote no database "
+                        f"file at {db}")
+    import sqlite3 as _s
+    rows = list(_s.connect(db).execute("SELECT body, weight FROM notes"))
+    if len(rows) != 3 or sum(r[1] for r in rows) != 16:
+        return False, f"database contents wrong: {rows!r}"
+    return True, f"ok -- real app identical on {sorted(outputs)}, db verified"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

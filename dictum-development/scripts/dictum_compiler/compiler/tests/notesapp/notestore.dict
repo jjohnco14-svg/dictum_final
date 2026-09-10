@@ -1,0 +1,44 @@
+module notestore
+
+    import from C the action notes_open takes text produces opaque pointer as notes_open
+    import from C the action notes_exec takes opaque pointer and text produces whole number as notes_exec
+    import from C the action notes_query_int takes opaque pointer and text produces whole number as notes_query_int
+    import from C the action notes_close takes opaque pointer produces whole number as notes_close
+
+    action open_store takes path as text produces opaque pointer
+        keep db as opaque pointer with no value
+        call notes_open with path giving db
+        return db
+    end action
+
+    action init_schema takes db as opaque pointer produces whole number
+        keep rc as whole number with value 0
+        call notes_exec with db and "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT, weight INTEGER)" giving rc
+        return rc
+    end action
+
+    action add_note takes db as opaque pointer and sql as text produces whole number
+        keep rc as whole number with value 0
+        call notes_exec with db and sql giving rc
+        return rc
+    end action
+
+    action count_notes takes db as opaque pointer produces whole number
+        keep n as whole number with value 0
+        call notes_query_int with db and "SELECT COUNT(*) FROM notes" giving n
+        return n
+    end action
+
+    action total_weight takes db as opaque pointer produces whole number
+        keep n as whole number with value 0
+        call notes_query_int with db and "SELECT IFNULL(SUM(weight),0) FROM notes" giving n
+        return n
+    end action
+
+    action close_store takes db as opaque pointer produces whole number
+        keep rc as whole number with value 0
+        call notes_close with db giving rc
+        return rc
+    end action
+
+end module
