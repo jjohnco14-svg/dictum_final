@@ -1206,6 +1206,10 @@ class CppEmitter:
         if isinstance(node, ForEach):
             self.emit(f"for (auto& {node.item} : {node.collection}) {{")
             self.indent += 1
+            # The body need not reference the loop variable; without this
+            # a valid Dictum program trips -Werror=unused-variable. Same
+            # fix as emit_c.py's ForEach.
+            self.emit(f"(void){node.item};")
             for stmt in node.body: self._emit_marked(stmt)
             self.indent -= 1
             self.emit("}")

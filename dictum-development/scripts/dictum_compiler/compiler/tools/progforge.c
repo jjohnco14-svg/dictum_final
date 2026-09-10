@@ -98,6 +98,7 @@ static long rndrange(long lo, long hi) {
 /* ------------------------------------------------------------------ */
 
 typedef struct {
+    Buf prelude;      /* shapes etc, emitted before `program` */
     Buf module_src;      /* may be empty (single-file program)  */
     Buf main_src;
     Buf expected;        /* concatenated expected stdout, whitespace-free */
@@ -205,6 +206,133 @@ static void gen_list_block(Program *p, int *lineno) {
     (*lineno)++;
 }
 
+
+/* ---------------------------------------------------------------------
+ * NESTED / COMBINED GENERATION
+ *
+ * The original generator emitted a FLAT sequence of independent blocks.
+ * Real programs nest: an if inside a while inside an action, a for-each
+ * whose body mutates an outer accumulator. Bugs live in those interactions
+ * (Dictum's own reference documents bug #18b as "nested `if` inside a plain
+ * `otherwise`" -- exactly a nesting bug, and exactly what flat generation
+ * can never produce).
+ *
+ * emit_nested() recurses to a random depth, so constructs combine in ways
+ * nobody chose deliberately. That is the point: a generator whose shapes
+ * are all hand-picked can only confirm what its author already considered.
+ * ------------------------------------------------------------------- */
+static void emit_nested(Program *p, int depth, int *lineno, long *acc,
+                        const char *accvar, int indent);
+
+static void ind(Program *p, int n) {
+    for (int i = 0; i < n; i++) bappend(&p->main_src, "    ");
+}
+
+static void emit_nested(Program *p, int depth, int *lineno, long *acc,
+                        const char *accvar, int indent) {
+    int kind = (int)rndrange(0, (depth > 0) ? 4 : 2);
+    int id = (*lineno)++;
+
+    if (kind == 0 || depth == 0) {                 /* leaf: accumulate */
+        long delta = rndrange(1, 9);
+        ind(p, indent);
+        bappend(&p->main_src, "put %s plus %ld into %s\n", accvar, delta, accvar);
+        *acc += delta;
+        return;
+    }
+    if (kind == 1) {                               /* if / otherwise  */
+        long lhs = rndrange(0, 20), rhs = rndrange(0, 20);
+        ind(p, indent);
+        bappend(&p->main_src, "keep g%d as whole number with value %ld\n", id, lhs);
+        ind(p, indent);
+        bappend(&p->main_src, "if g%d is greater than %ld then\n", id, rhs);
+        long saved = *acc;
+        long taken = 0, nottaken = 0;
+        if (lhs > rhs) { emit_nested(p, depth - 1, lineno, acc, accvar, indent + 1);
+                         taken = *acc - saved; }
+        else           { long tmp = saved; emit_nested(p, depth - 1, lineno, &tmp, accvar, indent + 1); }
+        ind(p, indent);
+        bappend(&p->main_src, "otherwise\n");
+        if (lhs > rhs) { long tmp = saved; emit_nested(p, depth - 1, lineno, &tmp, accvar, indent + 1); }
+        else           { long before = *acc; emit_nested(p, depth - 1, lineno, acc, accvar, indent + 1);
+                         nottaken = *acc - before; }
+        (void)taken; (void)nottaken;
+        ind(p, indent);
+        bappend(&p->main_src, "end if\n");
+        return;
+    }
+    if (kind == 2) {                               /* while loop      */
+        long n = rndrange(1, 4);
+        ind(p, indent);
+        bappend(&p->main_src, "keep i%d as whole number with value 0\n", id);
+        ind(p, indent);
+        bappend(&p->main_src, "while i%d is less than %ld repeat\n", id, n);
+        long before = *acc;
+        long tmp = before;
+        emit_nested(p, depth - 1, lineno, &tmp, accvar, indent + 1);
+        long per_iter = tmp - before;
+        ind(p, indent + 1);
+        bappend(&p->main_src, "put i%d plus 1 into i%d\n", id, id);
+        ind(p, indent);
+        bappend(&p->main_src, "end while\n");
+        *acc = before + per_iter * n;
+        return;
+    }
+    if (kind == 3) {                               /* repeat N times using */
+        long n = rndrange(1, 4);
+        ind(p, indent);
+        bappend(&p->main_src, "repeat %ld times using k%d\n", n, id);
+        long before = *acc;
+        long tmp = before;
+        emit_nested(p, depth - 1, lineno, &tmp, accvar, indent + 1);
+        long per_iter = tmp - before;
+        ind(p, indent);
+        bappend(&p->main_src, "end repeat\n");
+        *acc = before + per_iter * n;
+        return;
+    }
+    /* kind == 4: for each over a growable list */
+    long n = rndrange(1, 3);
+    ind(p, indent);
+    bappend(&p->main_src, "keep xs%d as growable list of whole number with no value\n", id);
+    for (long q = 0; q < n; q++) {
+        ind(p, indent);
+        bappend(&p->main_src, "add %ld to xs%d\n", rndrange(1, 5), id);
+    }
+    ind(p, indent);
+    bappend(&p->main_src, "for each e%d in xs%d repeat\n", id, id);
+    long before = *acc, tmp = before;
+    emit_nested(p, depth - 1, lineno, &tmp, accvar, indent + 1);
+    long per_iter = tmp - before;
+    ind(p, indent);
+    bappend(&p->main_src, "end for\n");
+    *acc = before + per_iter * n;
+}
+
+static void gen_nested_block(Program *p, int *lineno) {
+    int id = (*lineno)++;
+    long acc = 0;
+    char accvar[32];
+    snprintf(accvar, sizeof accvar, "acc%d", id);
+    bappend(&p->main_src, "    keep %s as whole number with value 0\n", accvar);
+    emit_nested(p, (int)rndrange(1, 3), lineno, &acc, accvar, 1);
+    bappend(&p->main_src, "    print the text \"z%d=\" and %s\n", id, accvar);
+    bappend(&p->expected, "z%d=%ld", id, acc);
+}
+
+static void gen_shape_block(Program *p, int *lineno) {
+    int id = (*lineno)++;
+    long w = rndrange(1, 12), h = rndrange(1, 12);
+    bappend(&p->prelude, "shape S%d holds:\n    w as whole number\n    h as whole number\nend shape\n\n", id);
+    bappend(&p->main_src, "    keep s%d as S%d with no value\n", id, id);
+    bappend(&p->main_src, "    set w of s%d to %ld\n", id, w);
+    bappend(&p->main_src, "    set h of s%d to %ld\n", id, h);
+    bappend(&p->main_src, "    keep ar%d as whole number with value 0\n", id);
+    bappend(&p->main_src, "    put w of s%d times h of s%d into ar%d\n", id, id, id);
+    bappend(&p->main_src, "    print the text \"s%d=\" and ar%d\n", id, id);
+    bappend(&p->expected, "s%d=%ld", id, w * h);
+}
+
 static void gen_module_with_actions(Program *p, int *lineno) {
     /* A module exporting BOTH an int-returning and a text-returning action.
      * This exact shape is what exposed the missing dictum_text entry in the
@@ -247,19 +375,23 @@ static void generate(Program *p) {
     } else {
         bappend(&p->main_src, "program main\n\n");
     }
+    /* shapes are emitted into prelude and must appear BEFORE `program`;
+     * spliced together at write time (see write_main_dict). */
 
     int nblocks = (int)rndrange(2, 5);
     if (p->multifile) gen_module_with_actions(p, &lineno);
 
     for (int i = 0; i < nblocks; i++) {
-        switch (rndrange(0, 6)) {
+        switch (rndrange(0, 8)) {
             case 0: gen_arith_block(p, &lineno);   break;
             case 1: gen_if_block(p, &lineno);      break;
             case 2: gen_while_block(p, &lineno);   break;
             case 3: gen_text_block(p, &lineno);    break;
             case 4: gen_bool_block(p, &lineno);    break;
             case 5: gen_decimal_block(p, &lineno); break;
-            default: gen_list_block(p, &lineno);   break;
+            case 6: gen_list_block(p, &lineno);    break;
+            case 7: gen_nested_block(p, &lineno);  break;
+            default: gen_shape_block(p, &lineno);  break;
         }
     }
     bappend(&p->main_src, "\nend program\n");
@@ -295,6 +427,107 @@ static int run_capture(const char *cmd, char *out, size_t cap) {
     return WIFEXITED(rc) ? WEXITSTATUS(rc) : -1;
 }
 
+
+/* Shapes must be declared before `program`, but the program body is built
+ * first, so the two buffers are spliced at write time. */
+static int write_main_dict(const char *path, Program *p) {
+    FILE *f = fopen(path, "w");
+    if (!f) return -1;
+    if (p->prelude.len) fputs(p->prelude.src, f);
+    fputs(p->main_src.src, f);
+    fclose(f);
+    return 0;
+}
+
+/* ---------------------------------------------------------------------
+ * AUTOMATIC MINIMIZATION (delta debugging)
+ *
+ * A finding is only actionable if it is small. A 40-line generated program
+ * that fails tells you almost nothing; the same failure reduced to 3 lines
+ * tells you the bug. This repeatedly drops lines from the failing program
+ * and keeps any reduction that STILL FAILS THE SAME WAY, so what lands in
+ * the inventory is a minimal reproducer rather than raw generator output.
+ *
+ * Guarded by same-signature checking: a reduction that fails for a
+ * DIFFERENT reason is rejected, otherwise minimization happily "reduces"
+ * one bug into an unrelated one.
+ * ------------------------------------------------------------------- */
+static int still_fails(const char *dir, const char *compiler_dir,
+                       const char *backend, const char *src,
+                       const char *signature) {
+    char path[1200], cmd[4096], buf[65536];
+    snprintf(path, sizeof path, "%s/min.dict", dir);
+    FILE *f = fopen(path, "w");
+    if (!f) return 0;
+    fputs(src, f);
+    fclose(f);
+    snprintf(cmd, sizeof cmd,
+        "cd %s && python3 %s/dictumc_cli.py min.dict --backend %s "
+        "--compile --output minbin 2>&1 | head -40",
+        dir, compiler_dir, backend);
+    buf[0] = 0;
+    run_capture(cmd, buf, sizeof buf);
+    if (!signature[0]) return 0;
+    return strstr(buf, signature) != NULL;
+}
+
+static void extract_signature(const char *log, char *sig, size_t cap) {
+    /* First line mentioning "error" (case-insensitive-ish), trimmed. */
+    sig[0] = 0;
+    const char *q = log;
+    while (*q) {
+        const char *nl = strchr(q, '\n');
+        size_t len = nl ? (size_t)(nl - q) : strlen(q);
+        if (len > 6 && len < cap - 1 &&
+            (strstr(q, "error") || strstr(q, "Error"))) {
+            size_t n = len < cap - 1 ? len : cap - 1;
+            memcpy(sig, q, n);
+            sig[n] = 0;
+            return;
+        }
+        if (!nl) break;
+        q = nl + 1;
+    }
+}
+
+static void minimize(const char *dir, const char *compiler_dir,
+                     const char *backend, const char *orig,
+                     const char *signature, char *out, size_t cap) {
+    char work[MAXSRC], trial[MAXSRC];
+    snprintf(work, sizeof work, "%s", orig);
+    int changed = 1, rounds = 0;
+    while (changed && rounds++ < 12) {
+        changed = 0;
+        /* try removing each line, keep the removal if it still fails
+         * the same way */
+        for (int li = 0; ; li++) {
+            char *lines[512];
+            int nl = 0;
+            snprintf(trial, sizeof trial, "%s", work);
+            char *tok = strtok(trial, "\n");
+            while (tok && nl < 512) { lines[nl++] = tok; tok = strtok(NULL, "\n"); }
+            if (li >= nl) break;
+            /* never drop the program header/footer -- removing them makes
+             * every reduction "fail", which is a false reduction */
+            if (strstr(lines[li], "program ") || strstr(lines[li], "end program"))
+                continue;
+            char cand[MAXSRC]; cand[0] = 0;
+            size_t used = 0;
+            for (int j = 0; j < nl; j++) {
+                if (j == li) continue;
+                int w = snprintf(cand + used, sizeof cand - used, "%s\n", lines[j]);
+                if (w > 0) used += (size_t)w;
+            }
+            if (still_fails(dir, compiler_dir, backend, cand, signature)) {
+                snprintf(work, sizeof work, "%s", cand);
+                changed = 1;
+                break;
+            }
+        }
+    }
+    snprintf(out, cap, "%s", work);
+}
+
 int main(int argc, char **argv) {
     long seconds = 60;
     long want_count = 0;   /* 0 = time-based; >0 = run exactly N programs */
@@ -310,6 +543,8 @@ int main(int argc, char **argv) {
     rng_state &= 0x7FFFFFFFUL;
 
     char cmd[4096], buf[65536], got[65536], want[65536];
+    char inventory_path[1024];
+    snprintf(inventory_path, sizeof inventory_path, "%s/findings_inventory.txt", workdir);
     mkdir(workdir, 0755);
 
     long total = 0, ok = 0, wrong = 0, buildfail = 0, disagree = 0;
@@ -335,7 +570,7 @@ int main(int argc, char **argv) {
 
         char path[1200];
         snprintf(path, sizeof path, "%s/main.dict", dir);
-        write_file(path, p.main_src.src);
+        write_main_dict(path, &p);
         if (p.multifile) {
             snprintf(path, sizeof path, "%s/helper.dict", dir);
             write_file(path, p.module_src.src);
@@ -366,6 +601,32 @@ int main(int argc, char **argv) {
             if (rc != 0 || buf[0] == 0) {
                 any_buildfail = 1;
                 outs[b][0] = 0;
+                /* MECHANICAL BUG HUNTING: capture the error signature,
+                 * auto-minimize the failing program down to a small
+                 * reproducer, and append both to an inventory file --
+                 * so a finding is actionable without a human reading a
+                 * 40-line generated program. */
+                if (!p.multifile) {
+                    char sig[512];
+                    extract_signature(buf, sig, sizeof sig);
+                    if (sig[0]) {
+                        char full[MAXSRC];
+                        snprintf(full, sizeof full, "%s%s",
+                                 p.prelude.len ? p.prelude.src : "", p.main_src.src);
+                        char small[MAXSRC];
+                        minimize(dir, compiler_dir, backends[b], full, sig,
+                                 small, sizeof small);
+                        FILE *inv = fopen(inventory_path, "a");
+                        if (inv) {
+                            fprintf(inv, "=== BUILD FAILURE  backend=%s  case=%ld ===\n",
+                                    backends[b], total);
+                            fprintf(inv, "signature: %s\n", sig);
+                            fprintf(inv, "--- minimized reproducer ---\n%s\n", small);
+                            fclose(inv);
+                        }
+                        printf("   -> minimized reproducer written to %s\n", inventory_path);
+                    }
+                }
                 /* Name the backend. A per-backend build failure used to be
                  * absorbed silently whenever the other backends still
                  * agreed -- which is precisely how a backend-specific bug
@@ -400,6 +661,17 @@ int main(int argc, char **argv) {
                 for (int b = 0; b < 3; b++)
                     if (good[b]) printf("   %-3s : %s\n", backends[b], outs[b]);
                 printf("   kept at %s\n", dir);
+                {
+                    FILE *inv = fopen(inventory_path, "a");
+                    if (inv) {
+                        fprintf(inv, "=== WRONG OUTPUT  case=%ld ===\nwant: %s\n", total, want);
+                        for (int q = 0; q < 3; q++)
+                            if (good[q]) fprintf(inv, "%-4s: %s\n", backends[q], outs[q]);
+                        fprintf(inv, "--- program ---\n%s%s\n",
+                                p.prelude.len ? p.prelude.src : "", p.main_src.src);
+                        fclose(inv);
+                    }
+                }
                 fflush(stdout);
             } else if (differ) {
                 disagree++;

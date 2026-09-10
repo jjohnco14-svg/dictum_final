@@ -243,6 +243,30 @@ def topo_sort(file_info: List[Dict]) -> List[Dict]:
 
 
 # ── Generate unified Makefile ─────────────────────────────────────────────────
+
+def _guard_shape_typedefs(src: str) -> str:
+    """Wrap each `typedef struct {...} Name;` in a per-shape #ifndef guard.
+
+    A shape declared in one .dict file is emitted BOTH into that file's own
+    generated C AND into the project-wide dictum_types.h aggregate. The
+    defining file doesn't include dictum_types.h directly, but it arrives
+    transitively through any module header it uses -- so the typedef lands
+    twice in one translation unit and gcc rejects it with "conflicting
+    types for 'S3'". Same problem, and same solution, as the per-symbol FFI
+    guards already used here: guard by name so however many paths deliver
+    the definition, only the first one takes effect.
+    """
+    def _wrap(m):
+        block = m.group(0)
+        nm = re.search(r'\}\s*(\w+)\s*;', block)
+        if not nm:
+            return block
+        g = f'DICTUM_SHAPE_{nm.group(1).upper()}_DEFINED'
+        return f'#ifndef {g}\n#define {g}\n{block}\n#endif'
+    return re.sub(r'typedef\s+struct\s*\w*\s*\{[^}]+\}\s*\w+\s*;',
+                  _wrap, src, flags=re.DOTALL)
+
+
 _RUNTIME_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runtime')
 
 
@@ -569,7 +593,7 @@ def build_project(
         '#include <stdint.h>', '#include <stdbool.h>', '#include <stdlib.h>', '',
         '#ifndef DICTUM_TEXT_DEFINED', '#define DICTUM_TEXT_DEFINED',
         'typedef const char *dictum_text;', '#endif', '',
-    ] + ([s.strip() for s in all_shapes_code] if all_shapes_code else []) + [
+    ] + ([_guard_shape_typedefs(s.strip()) for s in all_shapes_code] if all_shapes_code else []) + [
         '', '#endif /* DICTUM_TYPES_H */',
     ]
     with open(shape_header_path, 'w', encoding='utf-8') as _fh:
@@ -722,6 +746,7 @@ def build_project(
             continue
 
         c_code = _guard_own_ffi_lines(c_code)
+        c_code = _guard_shape_typedefs(c_code)
 
         # Determine output filename
         base = os.path.splitext(os.path.basename(fp))[0]

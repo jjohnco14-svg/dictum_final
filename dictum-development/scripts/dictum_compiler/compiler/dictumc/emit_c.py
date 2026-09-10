@@ -1911,6 +1911,13 @@ class CEmitter:
                 self.indent += 1
                 self.emit(f"int32_t {node.item} = "
                           f"dictum_glist_get(&{node.collection}, __i);")
+                # A `for each` body need not reference the loop variable
+                # (`for each n in xs repeat` counting iterations, say).
+                # Without this the generated code trips
+                # -Werror=unused-variable and the whole build fails on
+                # perfectly valid Dictum. Found by generated programs whose
+                # nested loop bodies happened not to use the item.
+                self.emit(f"(void){node.item};")
                 for stmt in node.body:
                     self._emit_marked(stmt)
                 self.indent -= 1
@@ -1923,6 +1930,7 @@ class CEmitter:
             # Strip array brackets from type if present
             elem_type = elem_type.replace("*", "").strip()
             self.emit(f"{elem_type} {node.item} = {node.collection}[__i];")
+            self.emit(f"(void){node.item};")   # body may not use it -- see above
             for stmt in node.body:
                 self._emit_marked(stmt)
             self.indent -= 1
