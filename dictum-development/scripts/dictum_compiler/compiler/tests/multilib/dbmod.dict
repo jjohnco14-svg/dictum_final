@@ -1,0 +1,11 @@
+module dbmod
+
+    import from C the action sqlite3_libversion_number takes nothing produces whole number as sqlite3_libversion_number
+
+    action db_version takes nothing produces whole number
+        keep n as whole number with value 0
+        call sqlite3_libversion_number giving n
+        return n
+    end action
+
+end module

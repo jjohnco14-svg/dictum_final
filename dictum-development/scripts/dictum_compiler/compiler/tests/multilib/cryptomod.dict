@@ -1,0 +1,11 @@
+module cryptomod
+
+    import from C the action RAND_status takes nothing produces whole number as RAND_status
+
+    action rng_ready takes nothing produces whole number
+        keep s as whole number with value 0
+        call RAND_status giving s
+        return s
+    end action
+
+end module

@@ -1,0 +1,11 @@
+module mathmod
+
+    import from C the action abs takes whole number produces whole number as c_abs
+
+    action absolute takes n as whole number produces whole number
+        keep r as whole number with value 0
+        call c_abs with n giving r
+        return r
+    end action
+
+end module

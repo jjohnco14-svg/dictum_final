@@ -1,0 +1,23 @@
+program main
+
+    use dbmod
+    use cryptomod
+    use mathmod
+
+    keep dv as whole number with value 0
+    call dbmod.db_version giving dv
+    keep ok as whole number with value 0
+    if dv is greater than 3000000 then
+        put 1 into ok
+    end if
+    print the text "db_ok=" and ok
+
+    keep rs as whole number with value 0
+    call cryptomod.rng_ready giving rs
+    print the text "rng=" and rs
+
+    keep av as whole number with value 0
+    call mathmod.absolute with 0 minus 42 giving av
+    print the text "abs=" and av
+
+end program

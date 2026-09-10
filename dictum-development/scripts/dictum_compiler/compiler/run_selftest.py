@@ -3323,7 +3323,12 @@ def test_r49_count_format_and_extern_c_linkage(tmp):
     if not os.path.exists(main_cpp):
         return False, f"expected main.cpp to be written; result={result}"
     src = open(main_cpp).read()
-    if 'extern "C" double Halve(double);' not in src:
+    # `noexcept` was added to every emitted C++ FFI declaration (C functions
+    # never throw, and glibc's C++ headers declare libc symbols noexcept --
+    # without it, binding e.g. abs is a hard "different exception specifier"
+    # error). Accept either form: the linkage claim this test exists to check
+    # is `extern "C"`, not the exception specifier.
+    if not re.search(r'extern "C" double Halve\(double\)( noexcept)?;', src):
         return False, (f"expected a real extern \"C\" linkage declaration for Halve, "
                         f"got:\n{src}")
 
@@ -4435,6 +4440,67 @@ def test_r77_real_multimodule_program(tmp):
     if len(set(outputs.values())) > 1:
         return False, f"backends DISAGREE on a real program: {outputs}"
     return True, f"ok -- identical output across {sorted(outputs)}"
+
+
+@regression("R78 multi-file + MULTI-LIBRARY: a project of 3 modules each "
+            "binding a DIFFERENT C library (sqlite3, libcrypto, libc) plus "
+            "a program using all three, built and run on all 3 backends. "
+            "Every earlier multi-file test used exactly ONE library, which "
+            "hid two real gaps: (1) project_builder.py had NO --link option "
+            "at all, so a multi-file project could not link ANY C library "
+            "-- it generated fine then died with 'undefined reference'; "
+            "(2) the C++ backend emitted `extern \"C\" int abs(int);` "
+            "without noexcept, but glibc's C++ headers declare libc symbols "
+            "noexcept and in C++17 that is part of the function TYPE, so "
+            "binding any libc function was a hard error -- and because the "
+            "aggregated externs header leaks every declaration into every "
+            "translation unit, ONE such binding broke the whole project")
+def test_r78_multifile_multilibrary(tmp):
+    src_dir = os.path.join(HERE, "tests", "multilib")
+    if not os.path.isdir(src_dir):
+        return None, "SKIP: tests/multilib fixtures not present"
+    if not os.path.exists("/usr/include/sqlite3.h"):
+        return None, "SKIP: libsqlite3-dev not available"
+    work = os.path.join(tmp, "multilib")
+    shutil.copytree(src_dir, work)
+
+    outputs = {}
+    for backend in ("c", "cpp", "nim"):
+        if backend == "nim" and shutil.which("nim") is None:
+            continue
+        mani = os.path.join(work, "dictum.project.json")
+        if os.path.exists(mani):
+            os.remove(mani)
+        out_dir = os.path.join(work, f"build_{backend}")
+        r = subprocess.run(
+            [sys.executable, PROJECT_BUILDER, work, "--backend", backend,
+             "--out", out_dir, "--link", "sqlite3", "crypto"],
+            capture_output=True, text=True, timeout=180, cwd=HERE,
+        )
+        if r.returncode != 0:
+            return False, f"[{backend}] build failed: {r.stdout}\n{r.stderr}"
+        if backend == "nim":
+            rb = subprocess.run(["sh", os.path.join(out_dir, "build.sh")],
+                                 capture_output=True, text=True, timeout=420, cwd=out_dir)
+        else:
+            rb = subprocess.run(["make"], capture_output=True, text=True,
+                                 timeout=180, cwd=out_dir)
+        if rb.returncode != 0:
+            return False, (f"[{backend}] compile/link failed -- likely --link "
+                            f"plumbing or the C++ noexcept FFI fix regressed: "
+                            f"{rb.stdout[-400:]}\n{rb.stderr[-400:]}")
+        run = _run(os.path.join(out_dir, "main"), timeout=20)
+        if run.returncode != 0:
+            return False, f"[{backend}] binary exited {run.returncode}"
+        outputs[backend] = "".join(run.stdout.split())
+
+    for expect in ("db_ok=1", "rng=1", "abs=42"):
+        for b, o in outputs.items():
+            if expect not in o:
+                return False, f"[{b}] missing {expect!r} in {o!r}"
+    if len(set(outputs.values())) > 1:
+        return False, f"backends DISAGREE: {outputs}"
+    return True, f"ok -- 3 modules / 3 libraries identical across {sorted(outputs)}"
 
 
 if __name__ == "__main__":

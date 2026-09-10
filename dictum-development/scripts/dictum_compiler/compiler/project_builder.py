@@ -398,6 +398,7 @@ def build_project(
     out_dir: Optional[str] = None,
     verbose: bool = False,
     static: bool = False,
+    link_libs: Optional[List[str]] = None,
 ) -> Dict:
     """
     Build all .dict files in workspace to C/C++.
@@ -879,6 +880,17 @@ def build_project(
                 f.write(f"#endif\n")
         written_files.append(h_path)
 
+    # Explicit --link libraries. `import from C` carries only the C symbol
+    # name, never the library it lives in, and the transpile step does not
+    # auto-discover them on any backend -- so without this a multi-file
+    # project using sqlite3/openssl/raylib/... generates fine and then fails
+    # at link time with "undefined reference". The single-file CLI has had
+    # --link for this reason; project_builder had no equivalent at all,
+    # which meant multi-file + FFI (a headline capability) could not
+    # actually produce a binary.
+    for _lib in (link_libs or []):
+        all_ldflags.add(f'-l{_lib}')
+
     # ── 7. Write Makefile (or, for nim, a build script) ───────────────────
     c_files = [f for f in written_files if f.endswith(ext_out)]
     if backend == 'nim':
@@ -956,6 +968,12 @@ def main():
     p.add_argument('--cpp-standard', type=int, choices=[17, 20, 23], default=17)
     p.add_argument('--out', default='', help='Output directory (default: <workspace>/build)')
     p.add_argument('--verbose', '-v', action='store_true')
+    p.add_argument('--link', nargs='*', default=None, metavar='LIB',
+                    help='System libraries to link, e.g. --link sqlite3 crypto. '
+                         'REQUIRED for any project whose modules use `import from C`: '
+                         'the transpile step never auto-discovers them (see the '
+                         'language reference on import from C), and without this a '
+                         'multi-file project simply cannot link a C library at all.')
     p.add_argument('--static', action='store_true',
                     help='Static-link the binary (-static -static-libgcc[-libstdc++]) -- '
                          'for a client deliverable that runs on any Linux box without '
@@ -966,6 +984,7 @@ def main():
         workspace=args.workspace,
         backend=args.backend,
         cpp_standard=args.cpp_standard,
+        link_libs=args.link,
         out_dir=args.out or None,
         verbose=args.verbose,
         static=args.static,

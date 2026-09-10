@@ -1353,7 +1353,19 @@ class CppEmitter:
             # the real (now-correctly-declared) C symbol internally, so
             # its own mangling doesn't matter; nothing links against the
             # alias name as an external C symbol.
-            self.emit(f'extern "C" {ret_cpp} {node.action_name}({params_decl});')
+            # `noexcept` matters here: glibc's C++ headers declare libc
+            # functions (abs, atoi, ...) as noexcept, and in C++17 the
+            # exception specifier is part of the function TYPE -- so a
+            # plain `extern "C" int abs(int);` is a hard error
+            # ("declaration of 'int abs(int) noexcept' has a different
+            # exception specifier"). C functions never throw, so declaring
+            # noexcept is correct for every FFI binding, and harmless for
+            # symbols the system headers don't declare at all. Found by a
+            # multi-module project binding three different libraries where
+            # one module bound a libc function -- the aggregated externs
+            # header then leaked that declaration into every translation
+            # unit.
+            self.emit(f'extern "C" {ret_cpp} {node.action_name}({params_decl}) noexcept;')
             if node.alias and node.alias != node.action_name:
                 arg_names = [f"a{i}" for i in range(len(cpp_params))]
                 wrapper_params = ", ".join(f"{t} {n}" for t, n in zip(cpp_params, arg_names))
