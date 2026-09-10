@@ -15,7 +15,7 @@ Usage:
 """
 
 from __future__ import annotations
-import os, sys, re, json, argparse
+import os, sys, re, json, argparse, shutil
 from pathlib import Path
 from typing import Dict, List, Set, Tuple, Optional
 
@@ -243,6 +243,9 @@ def topo_sort(file_info: List[Dict]) -> List[Dict]:
 
 
 # ── Generate unified Makefile ─────────────────────────────────────────────────
+_RUNTIME_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runtime')
+
+
 def generate_makefile(
     file_info: List[Dict],
     c_files: List[str],
@@ -294,8 +297,17 @@ def generate_makefile(
         f"# Rebuild with: make",
         f"",
         f"CC       = {compiler}",
-        f"CFLAGS   = {std_flag}-Wall -Wextra -Werror -O2 -I.",
-        f"CFLAGS_D = {std_flag}{asan_flag}-Wall -Wextra -O1 -g -I.  # debug+asan (warnings-only, not -Werror, so a debugging session isn't blocked by a style warning while chasing a real ASan finding)",
+        # -I <runtime dir> is REQUIRED, not optional: any program using a
+        # runtime-header stdlib feature (growable list, map, set, JSON,
+        # text, ...) #includes e.g. dictum_glist.h, which lives in the
+        # compiler's runtime/ directory and is NOT copied into the build
+        # dir. Without it a multi-file build dies with "dictum_glist.h: No
+        # such file or directory". The single-file CLI path was given this
+        # same fix earlier (see R60); the multi-file Makefile never got it,
+        # so the gap survived until a generated multi-module program that
+        # used a growable list finally exercised it.
+        f"CFLAGS   = {std_flag}-Wall -Wextra -Werror -O2 -I. -I{_RUNTIME_DIR}",
+        f"CFLAGS_D = {std_flag}{asan_flag}-Wall -Wextra -O1 -g -I. -I{_RUNTIME_DIR}  # debug+asan (warnings-only, not -Werror, so a debugging session isn't blocked by a style warning while chasing a real ASan finding)",
         f"LDFLAGS  = {ldflags_str}",
         f"SRCS     = {' '.join(os.path.basename(f) for f in c_files)}",
         f"OBJS     = {obj_list}",
@@ -817,18 +829,30 @@ def build_project(
             if verbose:
                 print(f"    → {h_name}", file=sys.stderr)
 
-    # ── 6. Generate stub headers referenced but not defined ───────────────
-    # e.g. dictum_core.h, dictum_error.h
+    # ── 6. Provide dictum_core.h / dictum_error.h in the build dir ────────
+    # These used to be written as EMPTY STUBS (just the include guard and
+    # three system includes). Because the Makefile puts `-I.` before the
+    # runtime include path, those stubs SHADOWED the real runtime headers
+    # of the same name -- so any file that genuinely needed a declaration
+    # from them (dictum_error_set, which dictum_glist.h and every other
+    # collection header calls) failed with "implicit declaration of
+    # function 'dictum_error_set'" under -Werror. Copy the REAL headers;
+    # only fall back to a stub if no real one exists.
     for stub_name in ['dictum_core', 'dictum_error']:
         h_path = os.path.join(build_dir, stub_name + '.h')
-        if not os.path.exists(h_path):
+        if os.path.exists(h_path):
+            continue
+        real_h = os.path.join(_RUNTIME_DIR, stub_name + '.h')
+        if os.path.exists(real_h):
+            shutil.copyfile(real_h, h_path)
+        else:
             with open(h_path, 'w', encoding='utf-8') as f:
                 f.write(f"/* {stub_name}.h — auto-generated stub */\n")
                 f.write(f"#ifndef {stub_name.upper()}_H\n")
                 f.write(f"#define {stub_name.upper()}_H\n")
                 f.write(f"#include <stdint.h>\n#include <stdbool.h>\n#include <stdlib.h>\n")
                 f.write(f"#endif\n")
-            written_files.append(h_path)
+        written_files.append(h_path)
 
     # ── 7. Write Makefile (or, for nim, a build script) ───────────────────
     c_files = [f for f in written_files if f.endswith(ext_out)]

@@ -155,6 +155,7 @@ class NimEmitter:
         self.shapes: Dict[str, Dict[str, str]] = {}
         self.current_module: Optional[str] = None
         self._imports: Set[str] = set()
+        self._needs_strformat = False
         # Names of `import from C`/`import from C++` functions whose
         # real Dictum return type is `text` -- see R-NIM-11 below for
         # why this has to be tracked at all.
@@ -245,6 +246,20 @@ class NimEmitter:
             return "cstring"
         return self.type_to_nim(dt)
 
+
+    def _is_float_expr(self, node) -> bool:
+        """True if this expression is a Dictum decimal/fractional number.
+        Used to give floats printf-compatible %f formatting on the Nim
+        backend so all three backends print the same digits."""
+        try:
+            if isinstance(node, Literal) and isinstance(node.value, float):
+                return True
+            if isinstance(node, Identifier):
+                return self.declared_vars.get(node.name, "") in ("float64", "float")
+        except Exception:
+            pass
+        return False
+
     def expr_to_nim(self, node) -> str:
         if node is None:
             return "/*nil*/"
@@ -287,6 +302,18 @@ class NimEmitter:
             if right in ('"empty"', "'empty'"):
                 right = "nil"
             op = _BIN_OP_MAP.get(node.op, node.op)
+            # Same strict-typing issue as VarDecl above, on the comparison
+            # side: `if flag is equal to 1` is idiomatic Dictum and fine on
+            # C/C++, but Nim rejects <bool, int literal(1)>. Coerce the
+            # literal when the other operand is known to be bool.
+            def _bool_side(n):
+                return (isinstance(n, Identifier)
+                        and self.declared_vars.get(n.name, "") == "bool")
+            if op in ("==", "!="):
+                if _bool_side(node.left) and right in ("0", "1"):
+                    right = "true" if right == "1" else "false"
+                elif _bool_side(node.right) and left in ("0", "1"):
+                    left = "true" if left == "1" else "false"
             return f"({left} {op} {right})"
         if isinstance(node, UnaryOp):
             # "the count of X" / "the length of X" parse to
@@ -423,6 +450,15 @@ class NimEmitter:
                 self.emit(f"var {_nim_ident(node.name)}: {nt} = {zv}")
             else:
                 val = self.expr_to_nim(node.value)
+                # Dictum's `truth value` is routinely initialized with a
+                # numeric literal (`keep flag as truth value with value 1`).
+                # C and C++ accept that silently -- neither has a strict
+                # bool -- but Nim is strictly typed and rejects it outright:
+                # "got 'int literal(1)' for '1' but expected 'bool'". The
+                # same valid Dictum program therefore built on two backends
+                # and failed on the third. Coerce here so all three agree.
+                if nt == "bool" and val in ("0", "1"):
+                    val = "true" if val == "1" else "false"
                 self.emit(f"var {_nim_ident(node.name)}: {nt} = {val}")
             return
 
@@ -598,7 +634,21 @@ class NimEmitter:
                 if s is None:
                     s = "/*nil-print*/"
                 elif not (isinstance(p, Literal) and isinstance(p.value, str)):
-                    s = f"$({s})"
+                    # Floats need explicit %f-style formatting, not Nim's
+                    # own `$`. Printing a `decimal number` produced
+                    # "2.500000" on C/C++ (printf's %f, six decimals) but
+                    # "2.5" on Nim -- the same program giving genuinely
+                    # different output, which is a correctness divergence
+                    # rather than a cosmetic one. Nim is aligned to the
+                    # C/C++ form here because those two are the established
+                    # majority: changing them instead would alter the output
+                    # of every existing Dictum program and every Guide C
+                    # manifest's expected_stdout.
+                    if self._is_float_expr(p):
+                        self._needs_strformat = True
+                        s = f'formatFloat({s}, ffDecimal, 6)'
+                    else:
+                        s = f"$({s})"
                 parts.append(s)
             self.emit("echo " + " & ".join(parts))
             return
@@ -794,6 +844,10 @@ class NimEmitter:
             needed.append("import std/tables")
         if "HashSet[" in body_text and "import std/sets" not in body_text:
             needed.append("import std/sets")
+        # formatFloat lives in std/strutils. Emitted when printing a
+        # decimal number, so Nim matches C/C++'s printf %f digits.
+        if "formatFloat(" in body_text and "import std/strutils" not in body_text:
+            needed.append("import std/strutils")
         if needed:
             insert_at = 0
             for i, line in enumerate(self.output):

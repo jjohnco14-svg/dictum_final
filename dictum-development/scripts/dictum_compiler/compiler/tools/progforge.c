@@ -162,6 +162,49 @@ static void gen_text_block(Program *p, int *lineno) {
     (*lineno)++;
 }
 
+
+/* --- Feature generators added AFTER the confirmation-bias problem was
+ * identified. The original generator only produced constructs whose bugs
+ * had ALREADY been found and fixed by hand, so a clean 100/100 run meant
+ * "my patches hold", not "the compiler is correct". These cover features
+ * the generator had never emitted -- probing them by hand immediately
+ * turned up two real bugs (a `truth value` initialized with a numeric
+ * literal was rejected only by Nim; printing a `decimal number` produced
+ * 2.500000 on C/C++ but 2.5 on Nim). Both are fixed; these generators
+ * exist so a REGRESSION in them would be caught mechanically. */
+
+static void gen_bool_block(Program *p, int *lineno) {
+    long v = rndrange(0, 1);
+    bappend(&p->main_src, "    keep b_%d as truth value with value %ld\n", *lineno, v);
+    bappend(&p->main_src, "    if b_%d is equal to 1 then\n", *lineno);
+    bappend(&p->main_src, "        print the text \"b%d=on\"\n", *lineno);
+    bappend(&p->main_src, "    otherwise\n");
+    bappend(&p->main_src, "        print the text \"b%d=off\"\n", *lineno);
+    bappend(&p->main_src, "    end if\n");
+    bappend(&p->expected, "b%d=%s", *lineno, v ? "on" : "off");
+    (*lineno)++;
+}
+
+static void gen_decimal_block(Program *p, int *lineno) {
+    long whole = rndrange(0, 40);
+    long half = rndrange(0, 1);
+    bappend(&p->main_src, "    keep d_%d as decimal number with value %ld.%s\n",
+            *lineno, whole, half ? "5" : "25");
+    bappend(&p->main_src, "    print the text \"d%d=\" and d_%d\n", *lineno, *lineno);
+    bappend(&p->expected, "d%d=%ld.%s", *lineno, whole, half ? "500000" : "250000");
+    (*lineno)++;
+}
+
+static void gen_list_block(Program *p, int *lineno) {
+    long n = rndrange(1, 5);
+    bappend(&p->main_src, "    keep xs_%d as growable list of whole number with no value\n", *lineno);
+    for (long i = 0; i < n; i++)
+        bappend(&p->main_src, "    add %ld to xs_%d\n", rndrange(1, 99), *lineno);
+    bappend(&p->main_src, "    print the text \"n%d=\" and the count of xs_%d\n", *lineno, *lineno);
+    bappend(&p->expected, "n%d=%ld", *lineno, n);
+    (*lineno)++;
+}
+
 static void gen_module_with_actions(Program *p, int *lineno) {
     /* A module exporting BOTH an int-returning and a text-returning action.
      * This exact shape is what exposed the missing dictum_text entry in the
@@ -209,11 +252,14 @@ static void generate(Program *p) {
     if (p->multifile) gen_module_with_actions(p, &lineno);
 
     for (int i = 0; i < nblocks; i++) {
-        switch (rndrange(0, 3)) {
-            case 0: gen_arith_block(p, &lineno); break;
-            case 1: gen_if_block(p, &lineno);    break;
-            case 2: gen_while_block(p, &lineno); break;
-            default: gen_text_block(p, &lineno); break;
+        switch (rndrange(0, 6)) {
+            case 0: gen_arith_block(p, &lineno);   break;
+            case 1: gen_if_block(p, &lineno);      break;
+            case 2: gen_while_block(p, &lineno);   break;
+            case 3: gen_text_block(p, &lineno);    break;
+            case 4: gen_bool_block(p, &lineno);    break;
+            case 5: gen_decimal_block(p, &lineno); break;
+            default: gen_list_block(p, &lineno);   break;
         }
     }
     bappend(&p->main_src, "\nend program\n");
@@ -317,7 +363,19 @@ int main(int argc, char **argv) {
             }
             buf[0] = 0;
             int rc = run_capture(cmd, buf, sizeof buf);
-            if (rc != 0 || buf[0] == 0) { any_buildfail = 1; outs[b][0] = 0; continue; }
+            if (rc != 0 || buf[0] == 0) {
+                any_buildfail = 1;
+                outs[b][0] = 0;
+                /* Name the backend. A per-backend build failure used to be
+                 * absorbed silently whenever the other backends still
+                 * agreed -- which is precisely how a backend-specific bug
+                 * hides. A program that builds on 2 of 3 backends is a
+                 * finding, not a pass. */
+                printf("!! BUILD FAILED on %-3s (case %ld, %s) kept at %s\n",
+                       backends[b], total, p.multifile ? "multifile" : "single", dir);
+                fflush(stdout);
+                continue;
+            }
             squash(buf, got, sizeof got);
             snprintf(outs[b], sizeof outs[b], "%s", got);
             good[b] = 1;
@@ -347,7 +405,7 @@ int main(int argc, char **argv) {
                 disagree++;
                 printf("!! BACKEND DISAGREEMENT (case %ld) kept at %s\n", total, dir);
                 fflush(stdout);
-            } else {
+            } else if (!any_buildfail) {
                 ok++;
                 snprintf(cmd, sizeof cmd, "rm -rf %s", dir);
                 if (system(cmd) != 0) { /* cleanup best-effort */ }
