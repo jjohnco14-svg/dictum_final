@@ -1896,6 +1896,26 @@ class CEmitter:
 
         # ----------------------------------------------------------------
         if isinstance(node, ForEach):
+            # A growable list is a dictum_glist_t struct, NOT a fixed array:
+            # it has no `<name>_count` companion variable and cannot be
+            # subscripted with []. Emitting array-style code here produced
+            # "'xs_count' undeclared" and "subscripted value is neither
+            # array nor pointer nor vector". The correct accessor pair
+            # (dictum_glist_len / dictum_glist_get) is the same one this
+            # emitter already uses for `item N of xs` indexing; the for-each
+            # path simply never got it. C-specific -- C++ and Nim both
+            # handled `for each` over a growable list correctly.
+            if self.declared_vars.get(node.collection) == "dictum_glist_t":
+                self.emit(f"for (size_t __i = 0; __i < "
+                          f"dictum_glist_len(&{node.collection}); __i++) {{")
+                self.indent += 1
+                self.emit(f"int32_t {node.item} = "
+                          f"dictum_glist_get(&{node.collection}, __i);")
+                for stmt in node.body:
+                    self._emit_marked(stmt)
+                self.indent -= 1
+                self.emit("}")
+                return
             # MISSING-01 / MISSING-07 FIX: for each over array
             self.emit(f"for (size_t __i = 0; __i < {node.collection}_count; __i++) {{")
             self.indent += 1
