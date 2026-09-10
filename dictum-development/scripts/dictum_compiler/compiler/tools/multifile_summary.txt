@@ -1,0 +1,19 @@
+{
+  "elapsed_seconds": 25,
+  "total_runs": 29,
+  "findings_count": 0,
+  "counts": {
+    "c": {
+      "ok": 0,
+      "reject": 29,
+      "internal": 0,
+      "crash": 0
+    },
+    "cpp": {
+      "ok": 0,
+      "reject": 29,
+      "internal": 0,
+      "crash": 0
+    }
+  }
+}
