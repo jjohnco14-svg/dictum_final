@@ -156,8 +156,20 @@ def generate_header(module_name: str, c_source: str, dict_source: str) -> str:
 
     # Extract function declarations (strip body, add semicolon)
     # Pattern: returntype funcname(params) {
+    #
+    # The return-type alternation must include Dictum's own typedefs, not
+    # just raw C ones. `dictum_text` was missing, so any module action
+    # returning `text` was silently dropped from this header -- callers in
+    # other files saw no declaration at all, which C treats as an implicit
+    # int-returning function: a real compile failure under -Werror, and a
+    # silent pointer/int type confusion without it. Confirmed with a real
+    # 3-module program where `version_number` (int32_t) was declared
+    # correctly while `version_text` (dictum_text) beside it vanished.
+    # `dictum_\w+` covers the other runtime typedefs (dictum_glist_t and
+    # friends) for the same reason.
     fn_pattern = re.compile(
-        r'^((?:int32_t|double|bool|void|const char\*|size_t|uint8_t\*|uint64_t|int64_t)\s+'
+        r'^((?:int32_t|double|bool|void|const char\*|size_t|uint8_t\*|uint64_t'
+        r'|int64_t|dictum_text|dictum_\w+\*?)\s+'
         r'\w+\s*\([^)]*\))\s*\{',
         re.MULTILINE
     )

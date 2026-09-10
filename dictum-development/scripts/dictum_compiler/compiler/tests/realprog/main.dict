@@ -1,0 +1,28 @@
+program main
+
+    use mathutil
+    use dbinfo
+
+    keep sq as whole number with value 0
+    call mathutil.square with 7 giving sq
+    print the text "square(7)=" and sq
+
+    keep c1 as whole number with value 0
+    call mathutil.clamp with 150 and 0 and 100 giving c1
+    print the text "clamp(150,0,100)=" and c1
+
+    keep c2 as whole number with value 0
+    call mathutil.clamp with 0 minus 5 and 0 and 100 giving c2
+    print the text "clamp(-5,0,100)=" and c2
+
+    keep ver as text with value ""
+    call dbinfo.version_text giving ver
+    print the text "sqlite=" and ver
+
+    keep vn as whole number with value 0
+    call dbinfo.version_number giving vn
+    keep vok as whole number with value 0
+    call mathutil.clamp with vn and 0 and 1 giving vok
+    print the text "sqlite_present=" and vok
+
+end program

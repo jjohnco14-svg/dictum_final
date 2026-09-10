@@ -1,0 +1,18 @@
+module dbinfo
+
+    import from C the action sqlite3_libversion takes nothing produces text as sqlite3_libversion
+    import from C the action sqlite3_libversion_number takes nothing produces whole number as sqlite3_libversion_number
+
+    action version_text takes nothing produces text
+        keep v as text with value ""
+        call sqlite3_libversion giving v
+        return v
+    end action
+
+    action version_number takes nothing produces whole number
+        keep n as whole number with value 0
+        call sqlite3_libversion_number giving n
+        return n
+    end action
+
+end module

@@ -118,6 +118,31 @@ _UNARY_OP_MAP = {
 }
 
 
+# Nim's reserved words. A Dictum program may legitimately name a variable
+# `out`, `type`, `end`, `method`, ... -- all fine in C and C++, all fatal in
+# Nim ("identifier expected, but got 'keyword out'"). Found by building a
+# real 3-module program that compiled cleanly on c and cpp and failed only
+# on nim purely because a local was named `out`. Sanitize rather than
+# reject: the Dictum source is valid, so the backend must accommodate it.
+_NIM_RESERVED = {
+    'addr','and','as','asm','bind','block','break','case','cast','concept',
+    'const','continue','converter','defer','discard','distinct','div','do',
+    'elif','else','end','enum','except','export','finally','for','from',
+    'func','if','import','in','include','interface','is','isnot','iterator',
+    'let','macro','method','mixin','mod','nil','not','notin','object','of',
+    'or','out','proc','ptr','raise','ref','return','shl','shr','static',
+    'template','try','tuple','type','using','var','when','while','xor','yield',
+}
+
+
+def _nim_ident(name):
+    """Map a Dictum identifier to a safe Nim one. Applied at BOTH the
+    declaration and every use site, so the rename stays consistent."""
+    if not isinstance(name, str):
+        return name
+    return f"{name}_d" if name.lower() in _NIM_RESERVED else name
+
+
 class NimEmitter:
     """Emits Nim source code from a Dictum AST."""
 
@@ -244,7 +269,7 @@ class NimEmitter:
                 return "@[" + ", ".join(elems) + "]"
             return str(v)
         if isinstance(node, Identifier):
-            return node.name
+            return _nim_ident(node.name)
         if isinstance(node, FieldAccess):
             return f"{node.obj}.{node.field}"
         if isinstance(node, IndexAccess):
@@ -395,10 +420,10 @@ class NimEmitter:
             self.declared_vars[node.name] = nt
             if node.value is None:
                 zv = self._zero_value(nt)
-                self.emit(f"var {node.name}: {nt} = {zv}")
+                self.emit(f"var {_nim_ident(node.name)}: {nt} = {zv}")
             else:
                 val = self.expr_to_nim(node.value)
-                self.emit(f"var {node.name}: {nt} = {val}")
+                self.emit(f"var {_nim_ident(node.name)}: {nt} = {val}")
             return
 
         if isinstance(node, AddToList):
@@ -417,7 +442,7 @@ class NimEmitter:
         if isinstance(node, MapPut):
             key = self.expr_to_nim(node.key)
             val = self.expr_to_nim(node.value)
-            self.emit(f"{node.name}[{key}] = {val}")
+            self.emit(f"{_nim_ident(node.name)}[{key}] = {val}")
             return
 
         if isinstance(node, Assignment):
@@ -447,9 +472,9 @@ class NimEmitter:
             if base_name not in self.declared_vars and "[" not in target and "." not in target:
                 inferred = self._infer_type(node.value) or "int32"
                 self.declared_vars[base_name] = inferred
-                self.emit(f"var {target}: {inferred} = {val}")
+                self.emit(f"var {_nim_ident(target)}: {inferred} = {val}")
             else:
-                self.emit(f"{target} = {val}")
+                self.emit(f"{_nim_ident(target)} = {val}")
             return
 
         if isinstance(node, Action):
@@ -528,7 +553,7 @@ class NimEmitter:
             if node.call:
                 call_str = self.expr_to_nim(node.call)
                 if node.result_name:
-                    self.emit(f"var {node.result_name} = {call_str}")
+                    self.emit(f"var {_nim_ident(node.result_name)} = {call_str}")
                 else:
                     self.emit(call_str)
             self.emit("try:")

@@ -4372,6 +4372,71 @@ def test_r76_multifile_all_three_backends(tmp):
     return True, f"ok -- multi-file cross-file FFI works on {sorted(results)}"
 
 
+@regression("R77 A REAL multi-module program (3 modules: pure logic, a "
+            "blessed-library FFI wrapper, and a program using both) builds "
+            "and produces IDENTICAL output on all three backends. Found two "
+            "real bugs no toy fixture reached: (1) project_builder's "
+            "generate_header return-type whitelist omitted dictum_text, so "
+            "a module action returning `text` was SILENTLY DROPPED from its "
+            "own module header -- callers saw no declaration, which C "
+            "treats as implicit int; (2) emit_nim.py never sanitized "
+            "identifiers against Nim's reserved words, so a variable "
+            "legitimately named `out` (fine in C/C++) crashed the Nim "
+            "compiler outright")
+def test_r77_real_multimodule_program(tmp):
+    src_dir = os.path.join(HERE, "tests", "realprog")
+    if not os.path.isdir(src_dir):
+        return None, "SKIP: tests/realprog fixtures not present"
+    if not os.path.exists("/usr/include/sqlite3.h"):
+        return None, "SKIP: libsqlite3-dev not available"
+    work = os.path.join(tmp, "realprog")
+    shutil.copytree(src_dir, work)
+
+    outputs = {}
+    for backend in ("c", "cpp", "nim"):
+        if backend == "nim" and shutil.which("nim") is None:
+            continue
+        mani = os.path.join(work, "dictum.project.json")
+        if os.path.exists(mani):
+            os.remove(mani)
+        out_dir = os.path.join(work, f"build_{backend}")
+        r = subprocess.run(
+            [sys.executable, PROJECT_BUILDER, work, "--backend", backend, "--out", out_dir],
+            capture_output=True, text=True, timeout=180, cwd=HERE,
+        )
+        if r.returncode != 0:
+            return False, f"[{backend}] build failed: {r.stdout}\n{r.stderr}"
+        if backend == "nim":
+            sh = os.path.join(out_dir, "build.sh")
+            txt = open(sh).read().replace("nim c --opt:speed",
+                                           "nim c --opt:speed --passL:-lsqlite3")
+            open(sh, "w").write(txt)
+            rb = subprocess.run(["sh", sh], capture_output=True, text=True,
+                                 timeout=420, cwd=out_dir)
+        else:
+            mf = os.path.join(out_dir, "Makefile")
+            txt = re.sub(r"^LDFLAGS  = .*$", "LDFLAGS  = -lm -lsqlite3",
+                          open(mf).read(), flags=re.MULTILINE)
+            open(mf, "w").write(txt)
+            rb = subprocess.run(["make"], capture_output=True, text=True,
+                                 timeout=180, cwd=out_dir)
+        if rb.returncode != 0:
+            return False, f"[{backend}] compile failed: {rb.stdout[-500:]}\n{rb.stderr[-500:]}"
+        run = _run(os.path.join(out_dir, "main"), timeout=20)
+        if run.returncode != 0:
+            return False, f"[{backend}] binary exited {run.returncode}"
+        outputs[backend] = "".join(run.stdout.split())
+
+    for expect in ("square(7)=49", "clamp(150,0,100)=100", "clamp(-5,0,100)=0",
+                   "sqlite_present=1"):
+        for b, o in outputs.items():
+            if expect not in o:
+                return False, f"[{b}] missing {expect!r} in {o!r}"
+    if len(set(outputs.values())) > 1:
+        return False, f"backends DISAGREE on a real program: {outputs}"
+    return True, f"ok -- identical output across {sorted(outputs)}"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 
