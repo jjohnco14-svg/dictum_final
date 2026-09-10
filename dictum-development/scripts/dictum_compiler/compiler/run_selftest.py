@@ -4790,6 +4790,55 @@ def test_r83_address_of_operator(tmp):
     return True, "ok -- sqlite3_open called directly, no C shim, on all backends"
 
 
+@regression("R84 Nim stdlib bridge + auto-enabled stdlib. Two gaps: (1) all "
+            "92 registered stdlib functions were mapped ONLY to C "
+            "implementations, so ANY `use Text`/`File`/`Math` program failed "
+            "on nim with \"undeclared identifier\" -- not a missing feature "
+            "here and there but the entire standard library, which is what "
+            "made nim a second-class backend; (2) on c/cpp, 33 of the 92 "
+            "resolve only via stdlib_registry.extend_emitter(), which only "
+            "StdlibTranspiler calls -- so without an undiscoverable --stdlib "
+            "flag `use Math` parsed fine, transpiled fine, and died at LINK "
+            "time with 'undefined reference to Math_sqrt'. Now auto-enabled "
+            "when the source uses a stdlib module")
+def test_r84_stdlib_all_backends(tmp):
+    src_dir = os.path.join(HERE, "tests", "nimstdlib")
+    if not os.path.isdir(src_dir):
+        return None, "SKIP: tests/nimstdlib fixtures not present"
+    src_tpl = open(os.path.join(src_dir, "stdlib_all.dict")).read()
+
+    outputs = {}
+    for backend in ("c", "cpp", "nim"):
+        if backend == "nim" and shutil.which("nim") is None:
+            continue
+        d = os.path.join(tmp, backend)
+        os.makedirs(d, exist_ok=True)
+        src = os.path.join(d, "s.dict")
+        open(src, "w").write(src_tpl)
+        out_bin = os.path.join(d, "s")
+        # NOTE: deliberately NO --stdlib flag -- auto-detection is the fix.
+        r = subprocess.run(
+            [sys.executable, CLI, src, "--backend", backend, "--compile",
+             "--output", out_bin],
+            capture_output=True, text=True, timeout=300, cwd=HERE)
+        if r.returncode != 0:
+            return False, (f"[{backend}] failed WITHOUT --stdlib -- either the "
+                            f"nim bridge or stdlib auto-detection regressed: "
+                            f"{(r.stdout + r.stderr)[-400:]}")
+        run = _run(out_bin, timeout=20, cwd=d)
+        if run.returncode != 0:
+            return False, f"[{backend}] exited {run.returncode}"
+        outputs[backend] = "".join(run.stdout.split())
+
+    for expect in ("file=payload", "sqrt=4.000000", "n2s=99"):
+        for b, o in outputs.items():
+            if expect not in o:
+                return False, f"[{b}] missing {expect!r} in {o!r}"
+    if len(set(outputs.values())) > 1:
+        return False, f"backends DISAGREE on stdlib results: {outputs}"
+    return True, f"ok -- Text/File/Math identical across {sorted(outputs)}, no flags"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

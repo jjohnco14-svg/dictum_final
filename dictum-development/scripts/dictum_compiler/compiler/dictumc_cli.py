@@ -217,7 +217,28 @@ def main() -> int:
     from dictumc.transpiler import Transpiler, StdlibTranspiler
     from dictumc.validator import ValidationError
 
-    TranspilerClass = StdlibTranspiler if args.stdlib else Transpiler
+    # Auto-enable the stdlib transpiler when the source actually uses a
+    # stdlib module. Without this, `use Math` (or Tls/Mutex/Thread/Net/...)
+    # parses fine, TRANSPILES fine, and then dies at LINK time with
+    # "undefined reference to Math_sqrt" -- because only the ~59 entries in
+    # emit_c.py's STATIC _MODULE_CALL_MAP resolve without it, while the
+    # other 33 registered stdlib functions are wired up by
+    # stdlib_registry.extend_emitter(), which only StdlibTranspiler calls.
+    # Nothing told the user the flag existed. A program that says `use Text`
+    # unambiguously wants the standard library.
+    _wants_stdlib = args.stdlib
+    if not _wants_stdlib:
+        try:
+            from dictumc.stdlib_registry import STDLIB_ACTION_FAMILIES as _SAF
+            _mods = {k.split('.')[0] for k in _SAF}
+            for _line in source.splitlines():
+                _t = _line.strip()
+                if _t.startswith('use ') and _t[4:].strip().split()[0] in _mods:
+                    _wants_stdlib = True
+                    break
+        except Exception:
+            pass
+    TranspilerClass = StdlibTranspiler if _wants_stdlib else Transpiler
 
     try:
         t = TranspilerClass(

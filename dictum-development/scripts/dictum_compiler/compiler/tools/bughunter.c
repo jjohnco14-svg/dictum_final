@@ -15,12 +15,18 @@ typedef const char* dictum_text;
 #include "dictum_text.h"
 #include "dictum_file.h"
 
+/* ── Dictum stdlib ── */
+#include "dictum_file.h"
+#include "dictum_text.h"
 
 extern int32_t system(dictum_text);
 static inline int32_t run_shell(dictum_text a0) { return system(a0); }
 extern int32_t getpid(void);
 extern int32_t dictum_flush_stdout(void);
 static inline int32_t flush_stdout(void) { return dictum_flush_stdout(); }
+int32_t test_one_backend(dictum_text mutant, dictum_text backend);
+bool smoke_test_backend(dictum_text backend);
+
 int32_t test_one_backend(dictum_text mutant, dictum_text backend) {
     /* @dictum-line:10 */
     #line 10 "<dict-source>"

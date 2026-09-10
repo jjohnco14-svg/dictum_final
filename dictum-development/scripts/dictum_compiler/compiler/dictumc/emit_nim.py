@@ -156,6 +156,7 @@ class NimEmitter:
         self.current_module: Optional[str] = None
         self._imports: Set[str] = set()
         self._needs_strformat = False
+        self._stdlib_used = {}
         # Names of `import from C`/`import from C++` functions whose
         # real Dictum return type is `text` -- see R-NIM-11 below for
         # why this has to be tracked at all.
@@ -362,6 +363,19 @@ class NimEmitter:
             for a in node.args:
                 s = self.expr_to_nim(a)
                 args.append(s if s is not None else "/*nil-arg*/")
+            # Dictum stdlib call (Text.concat, File.read, Math.sqrt, ...).
+            # These were mapped ONLY to C implementations in runtime/*.h, so
+            # every `use Text` program failed on nim with "undeclared
+            # identifier: 'Text'" -- the single gap that made nim a
+            # second-class backend. Map onto Nim's own stdlib instead, and
+            # record the proc so only the ones actually used get emitted.
+            if "." in node.name:
+                from .nim_stdlib import resolve as _nim_std_resolve
+                hit = _nim_std_resolve(node.name)
+                if hit is not None:
+                    proc_name, imports, src = hit
+                    self._stdlib_used[node.name] = (proc_name, imports, src)
+                    return f"{proc_name}({', '.join(args)})"
             return f"{node.name}({', '.join(args)})"
         if isinstance(node, NewExpr):
             args = []
@@ -856,6 +870,31 @@ class NimEmitter:
         # R-NIM-8.
         needed = []
         body_text = "\n".join(self.output)
+        # Stdlib bridge prelude: emit ONLY the procs this program actually
+        # used, plus their required std imports. A program using two Text
+        # calls should not carry 40 unused definitions.
+        if self._stdlib_used:
+            procs = []
+            for _dn, (_pn, _imps, _src) in sorted(self._stdlib_used.items()):
+                for _i in _imps:
+                    imp = f"import std/{_i}"
+                    if imp not in needed and imp not in body_text:
+                        needed.append(imp)
+                procs.append(_src)
+            # Insert the proc definitions after the import block but before
+            # any code that calls them.
+            at = 0
+            for i, line in enumerate(self.output):
+                if line.startswith("import ") or not line.strip():
+                    at = i + 1
+                else:
+                    break
+            block = ["# --- Dictum stdlib bridge (nim) ---"] + \
+                    [l for src in procs for l in src.rstrip().split("\n")] + [""]
+            for off, l in enumerate(block):
+                self.output.insert(at + off, l)
+            body_text = "\n".join(self.output)
+
         if "Table[" in body_text and "import std/tables" not in body_text:
             needed.append("import std/tables")
         if "HashSet[" in body_text and "import std/sets" not in body_text:

@@ -1,0 +1,19 @@
+use Text
+use File
+use Math
+
+program p
+    keep ok as truth value with value 0
+    call File.write with "stdlib_probe.txt" and "payload" giving ok
+    keep back as text with value ""
+    call File.read with "stdlib_probe.txt" giving back
+    print the text "file=" and back
+
+    keep r as decimal number with value 0.0
+    call Math.sqrt with 16.0 giving r
+    print the text "sqrt=" and r
+
+    keep s as text with value ""
+    call Text.from_int with 99 giving s
+    print the text "n2s=" and s
+end program
