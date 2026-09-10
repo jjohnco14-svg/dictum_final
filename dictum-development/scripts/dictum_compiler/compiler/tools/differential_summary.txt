@@ -1,0 +1,21 @@
+{
+  "elapsed_seconds": 58,
+  "total_runs": 12,
+  "accept_divergences": 0,
+  "output_divergences": 1,
+  "newline_only_divergences_KNOWN": 6,
+  "enabled": {
+    "c": true,
+    "cpp": true,
+    "nim": true
+  },
+  "skip_reasons": {},
+  "by_mutation": {
+    "op_swap": 0,
+    "cmp_swap": 0,
+    "num_change": 1,
+    "truncate": 0,
+    "drop_line": 0,
+    "dup_line": 0
+  }
+}

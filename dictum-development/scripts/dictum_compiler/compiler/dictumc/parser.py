@@ -161,21 +161,45 @@ class Parser:
         name = self.expect_word().value
         self.consume_newlines()
         body = self.parse_block()
-        if self.cur().type == TokenType.WORD and self.cur().value == 'end':
+        # `end program` is REQUIRED. This used to be an optional check that
+        # silently proceeded when the terminator was absent, so a truncated
+        # or malformed .dict file (missing `end program`, e.g. a file cut
+        # short by a failed copy or an unfinished edit) parsed as if it were
+        # a complete program and emitted a real, running binary on the C and
+        # C++ backends -- found by cross-backend differential fuzzing, where
+        # Nim's indentation-sensitive output rejected the same input that C
+        # and C++ silently accepted. Malformed source must be a Case A
+        # ("fix your .dict") error, never a silently-wrong deliverable.
+        if not (self.cur().type == TokenType.WORD and self.cur().value == 'end'):
+            raise SyntaxError(
+                f"program '{name}' (line {line}) is missing its `end program` "
+                f"terminator -- reached {self._describe_cur()} instead"
+            )
+        self.advance()
+        if self.cur().type == TokenType.WORD and self.cur().value == 'program':
             self.advance()
-            if self.cur().type == TokenType.WORD and self.cur().value == 'program':
-                self.advance()
         return Program(name=name, body=body, line=line)
+
+    def _describe_cur(self) -> str:
+        tok = self.cur()
+        if tok.type == TokenType.EOF:
+            return "end of file"
+        return f"'{tok.value}' at line {tok.line}"
 
     def parse_module(self) -> Module:
         line = self.advance().line
         name = self.expect_word().value
         self.consume_newlines()
         body = self.parse_block()
-        if self.cur().type == TokenType.WORD and self.cur().value == 'end':
+        # `end module` is REQUIRED -- same reasoning as parse_program above.
+        if not (self.cur().type == TokenType.WORD and self.cur().value == 'end'):
+            raise SyntaxError(
+                f"module '{name}' (line {line}) is missing its `end module` "
+                f"terminator -- reached {self._describe_cur()} instead"
+            )
+        self.advance()
+        if self.cur().type == TokenType.WORD and self.cur().value == 'module':
             self.advance()
-            if self.cur().type == TokenType.WORD and self.cur().value == 'module':
-                self.advance()
         return Module(name=name, body=body, line=line)
 
     # ------------------------------------------------------------------
@@ -1007,10 +1031,17 @@ class Parser:
             else:
                 # Plain `otherwise` / `else` block
                 else_body = self.parse_block()
-        if self.cur().type == TokenType.WORD and self.cur().value == 'end':
+        # `end if` is REQUIRED -- same reasoning as parse_program: an
+        # unterminated `if` used to parse silently as a complete block,
+        # emitting a real binary on C/C++ from malformed source.
+        if not (self.cur().type == TokenType.WORD and self.cur().value == 'end'):
+            raise SyntaxError(
+                f"`if` block starting at line {line} is missing its `end if` "
+                f"terminator -- reached {self._describe_cur()} instead"
+            )
+        self.advance()
+        if self.cur().type == TokenType.WORD and self.cur().value == 'if':
             self.advance()
-            if self.cur().type == TokenType.WORD and self.cur().value == 'if':
-                self.advance()
         return If(cond=cond, then_body=then_body, else_body=else_body, line=line)
 
     def parse_while(self) -> While:

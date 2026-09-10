@@ -4218,6 +4218,60 @@ def test_r73_no_duplicate_ffi_symbol_definition(tmp):
     return True, "ok"
 
 
+@regression("R74 parser.py: `end program` / `end module` / `end if` are "
+            "REQUIRED, not optional. They used to be checked with a bare "
+            "`if cur == 'end'` that silently proceeded when absent, so a "
+            "truncated or malformed .dict file parsed as though complete "
+            "and emitted a REAL, RUNNING BINARY on the C and C++ backends "
+            "-- malformed source producing a silently-wrong deliverable is "
+            "the worst possible failure mode for this project. Found by "
+            "cross-backend differential fuzzing: Nim's indentation-"
+            "sensitive output rejected the exact same inputs C and C++ "
+            "silently accepted (4 divergences in 120 mutants; 0 after the "
+            "fix)")
+def test_r74_block_terminators_required(tmp):
+    cases = [
+        ("missing end if",
+         'program p\n    keep a as whole number with value 9\n'
+         '    if a is greater than 2 then\n        print the text "y"\n'),
+        ("missing end program",
+         'program p\n    keep a as whole number with value 9\n'),
+    ]
+    for label, src in cases:
+        path = os.path.join(tmp, "bad.dict")
+        open(path, "w").write(src)
+        out_bin = os.path.join(tmp, "bad_bin")
+        r = subprocess.run(
+            [sys.executable, CLI, path, "--backend", "c", "--compile", "--output", out_bin],
+            capture_output=True, text=True, timeout=20, cwd=HERE,
+        )
+        if r.returncode == 0:
+            return False, (f"[{label}] malformed source was ACCEPTED and compiled "
+                            f"(regressed -- block terminators optional again). "
+                            f"This silently produces a wrong binary from broken source.")
+        combined = r.stdout + r.stderr
+        if "terminator" not in combined:
+            return False, f"[{label}] rejected, but not with a clear terminator error: {combined[-300:]!r}"
+
+    good = os.path.join(tmp, "good.dict")
+    open(good, "w").write(
+        'program p\n    keep a as whole number with value 9\n'
+        '    if a is greater than 2 then\n        print the text "yes"\n'
+        '    end if\nend program\n'
+    )
+    good_bin = os.path.join(tmp, "good_bin")
+    r2 = subprocess.run(
+        [sys.executable, CLI, good, "--backend", "c", "--compile", "--output", good_bin],
+        capture_output=True, text=True, timeout=20, cwd=HERE,
+    )
+    if r2.returncode != 0:
+        return False, f"well-formed source was WRONGLY rejected: {r2.stdout}\n{r2.stderr}"
+    run = _run(good_bin, timeout=10)
+    if "yes" not in run.stdout:
+        return False, f"well-formed program ran but output wrong: {run.stdout!r}"
+    return True, "ok -- malformed rejected with a clear error, well-formed still works"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

@@ -16,6 +16,7 @@ Usage:
 import sys
 import os
 import argparse
+import re
 import subprocess
 import tempfile
 
@@ -272,13 +273,28 @@ def main() -> int:
         binary_out = args.output or (os.path.splitext(args.file)[0] if args.file else "a.out")
 
         if args.backend == "nim":
-            # Write to temp for compilation
-            with tempfile.NamedTemporaryFile(suffix=".nim", mode='w', delete=False,
-                                             encoding='utf-8') as tf:
+            # Persist the intermediate source at a DETERMINISTIC, Nim-valid
+            # name next to the binary, rather than a random tempfile.
+            #
+            # Real bug this fixes (found by differential fuzzing): Nim takes
+            # its module name from the source filename and rejects names
+            # containing double underscores -- "Error: invalid module name:
+            # tmpXXXX__Y". tempfile.NamedTemporaryFile generates random
+            # names that sometimes contain "__", so the Nim backend failed
+            # NONDETERMINISTICALLY: the exact same .dict input would compile
+            # or fail depending only on which temp name it happened to draw.
+            # Sanitize defensively too, in case the user's own output name
+            # would itself be an invalid Nim module name.
+            base_dir = os.path.dirname(os.path.abspath(binary_out)) or "."
+            base_name = os.path.basename(binary_out) or "dictum_out"
+            safe = re.sub(r'[^0-9A-Za-z_]', '_', base_name)
+            safe = re.sub(r'_+', '_', safe).strip('_') or "dictum_out"
+            if safe[0].isdigit():
+                safe = "m" + safe
+            src_path = os.path.join(base_dir, safe + ".nim")
+            with open(src_path, "w", encoding="utf-8") as tf:
                 tf.write(code)
-                src_path = tf.name
             rc = _compile_nim(src_path, binary_out, extra_libs=args.link)
-            os.unlink(src_path)
             if rc != 0:
                 return rc
             if args.run:
