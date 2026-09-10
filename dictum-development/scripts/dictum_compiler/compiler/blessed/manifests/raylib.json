@@ -1,0 +1,44 @@
+{
+  "library": "raylib",
+  "link": [
+    "raylib",
+    "m",
+    "pthread",
+    "dl",
+    "rt",
+    "GL",
+    "X11"
+  ],
+  "headers": [
+    "raylib.h"
+  ],
+  "shapes": [],
+  "imports": [
+    {
+      "c_name": "InitWindow",
+      "params": [
+        "whole number",
+        "whole number",
+        "text"
+      ],
+      "returns": "nothing",
+      "alias": "InitWindow"
+    },
+    {
+      "c_name": "CloseWindow",
+      "params": [],
+      "returns": "nothing",
+      "alias": "CloseWindow"
+    }
+  ],
+  "verify": {
+    "body": "    call InitWindow with 200 and 150 and \"t\"\n    call CloseWindow\n    print the text \"ok:1\"",
+    "expect_regex": "ok:1"
+  },
+  "needs_display": true,
+  "_verified": {
+    "c": true,
+    "cpp": true,
+    "nim": true
+  }
+}

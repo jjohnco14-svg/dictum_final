@@ -4272,6 +4272,106 @@ def test_r74_block_terminators_required(tmp):
     return True, "ok -- malformed rejected with a clear error, well-formed still works"
 
 
+@regression("R75 emit_nim.py ImportC params: `import from C the action f "
+            "takes whole number and text ...` lists TYPES only, never "
+            "parameter names. The old rsplit(' ', 1) assumed a "
+            "'<type> <name>' shape and got BOTH cases wrong: a two-word "
+            "type like `whole number` became type 'whole' + name 'number' "
+            "(invalid Nim), and a single-word type like `text` was "
+            "SILENTLY DROPPED (len(parts) != 2), giving the Nim proc the "
+            "wrong arity versus the real C symbol -- a silent ABI "
+            "mismatch, not a compile error. Found by libmanifest.py "
+            "verifying sdl2/raylib across all three targets: both passed "
+            "on c and cpp, both failed only on nim")
+def test_r75_nim_ffi_param_types(tmp):
+    if shutil.which("nim") is None:
+        return None, "SKIP: nim not available"
+    src = os.path.join(tmp, "ffi.dict")
+    open(src, "w").write(
+        'import from C the action sqlite3_compileoption_used takes text '
+        'produces whole number as opt_used\n'
+        'import from C the action sqlite3_libversion_number takes nothing '
+        'produces whole number as ver_num\n\n'
+        'program ffi_prog\n'
+        '    keep r as whole number with value 0\n'
+        '    call opt_used with "ENABLE_FTS3" giving r\n'
+        '    keep v as whole number with value 0\n'
+        '    call ver_num giving v\n'
+        '    print the text "v:" and v\n'
+        'end program\n'
+    )
+    out_bin = os.path.join(tmp, "ffi_bin")
+    r = subprocess.run(
+        [sys.executable, CLI, src, "--backend", "nim", "--compile",
+         "--output", out_bin, "--link", "sqlite3"],
+        capture_output=True, text=True, timeout=120, cwd=HERE,
+    )
+    if r.returncode != 0:
+        return False, f"nim compile failed (regressed): {(r.stdout + r.stderr)[-500:]}"
+    nim_src = out_bin + ".nim"
+    if os.path.exists(nim_src):
+        text = open(nim_src).read()
+        if "a0: cstring" not in text:
+            return False, (f"single-word `text` param missing or misnamed in "
+                            f"generated Nim (regressed -- it used to be dropped "
+                            f"entirely): {text[:300]!r}")
+    run = _run(out_bin, timeout=10)
+    if not re.search(r"v:\d+", run.stdout):
+        return False, f"ran but output wrong: {run.stdout!r}"
+    return True, "ok -- multi-word and single-word FFI param types both correct on nim"
+
+
+@regression("R76 multi-file projects build and run on ALL THREE backends. "
+            "project_builder.py was hardcoded to choices=['c','cpp'], and "
+            "three separate gaps kept nim out: emit_nim.py silently dropped "
+            "every `use` statement (so a module could never reference a "
+            "sibling), StdlibTranspiler had no 'nim' branch and fell "
+            "through to CEmitter (silently emitting C source into .nim "
+            "files), and stdlib_registry.extend_emitter unconditionally "
+            "touched emitter.types which NimEmitter deliberately lacks")
+def test_r76_multifile_all_three_backends(tmp):
+    _write_multifile_ffi_project(tmp)
+    results = {}
+    for backend in ("c", "cpp", "nim"):
+        if backend == "nim" and shutil.which("nim") is None:
+            continue
+        out_dir = os.path.join(tmp, f"build_{backend}")
+        r = subprocess.run(
+            [sys.executable, PROJECT_BUILDER, tmp, "--backend", backend, "--out", out_dir],
+            capture_output=True, text=True, timeout=120, cwd=HERE,
+        )
+        if r.returncode != 0:
+            return False, f"[{backend}] project_builder failed: {r.stdout}\n{r.stderr}"
+        if backend == "nim":
+            script = os.path.join(out_dir, "build.sh")
+            if not os.path.exists(script):
+                return False, "[nim] expected build.sh (nim needs no Makefile)"
+            src = os.path.join(out_dir, "main.nim")
+            if not os.path.exists(src):
+                return False, f"[nim] no main.nim emitted: {os.listdir(out_dir)}"
+            text = open(src).read()
+            if "#include" in text:
+                return False, ("[nim] emitted C source into a .nim file "
+                                "(regressed -- StdlibTranspiler nim branch gone)")
+            if "import sysinfo" not in text:
+                return False, ("[nim] missing `import sysinfo` -- emit_nim is "
+                                "dropping `use` again")
+            rb = subprocess.run(["sh", script], capture_output=True, text=True,
+                                 timeout=300, cwd=out_dir)
+            if rb.returncode != 0:
+                return False, f"[nim] build.sh failed: {rb.stdout[-400:]}\n{rb.stderr[-400:]}"
+        else:
+            rb = subprocess.run(["make"], capture_output=True, text=True,
+                                 timeout=120, cwd=out_dir)
+            if rb.returncode != 0:
+                return False, f"[{backend}] make failed: {rb.stdout}\n{rb.stderr}"
+        run = _run(os.path.join(out_dir, "main"), timeout=15)
+        if not re.search(r"pid:\d+", run.stdout):
+            return False, f"[{backend}] unexpected output: {run.stdout!r}"
+        results[backend] = True
+    return True, f"ok -- multi-file cross-file FFI works on {sorted(results)}"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

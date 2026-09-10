@@ -589,11 +589,24 @@ class NimEmitter:
         if isinstance(node, ImportC):
             nim_params = []
             if node.params:
-                for p in node.params:
-                    parts = p.strip().rsplit(' ', 1)
-                    if len(parts) == 2:
-                        nim_type = self.type_to_nim_ffi(parts[0])
-                        nim_params.append(f"{parts[1]}: {nim_type}")
+                # Each entry in node.params is a TYPE, not "<type> <name>".
+                # Dictum's `import from C the action f takes whole number
+                # and text ...` names no parameters at all -- exactly like
+                # emit_c.py, which generates its own a0/a1 argument names.
+                # The previous rsplit(' ', 1) here assumed a "<type> <name>"
+                # shape and got BOTH cases wrong:
+                #   * `whole number` -> type "whole", name "number" (emits
+                #     an invalid Nim type; `whole` does not exist)
+                #   * `text`         -> len(parts) == 1, so the parameter
+                #     was silently DROPPED, giving the Nim proc the wrong
+                #     arity versus the real C symbol -- a silent ABI
+                #     mismatch, not a compile error.
+                # Found by libmanifest.py verifying sdl2/raylib across all
+                # three targets: both passed on c and cpp, both failed only
+                # on nim.
+                for i, p in enumerate(node.params):
+                    nim_type = self.type_to_nim_ffi(p.strip())
+                    nim_params.append(f"a{i}: {nim_type}")
             params_str = ", ".join(nim_params)
             ret = self.type_to_nim_ffi(node.ret_type) if node.ret_type else "void"
             name = node.alias or node.action_name
@@ -649,6 +662,19 @@ class NimEmitter:
             return
 
         if isinstance(node, Use):
+            # Emit a real Nim `import` for a module defined in a SIBLING
+            # project file. This used to `return` unconditionally, silently
+            # dropping every `use` -- which meant a multi-file Nim build had
+            # no way to reference another module at all, the core reason
+            # project_builder.py only ever offered c/cpp.
+            #
+            # Stdlib `use Text` / `use File` and same-file modules are still
+            # dropped on purpose: the former are provided by Dictum's own
+            # runtime rather than a Nim module, and the latter are already
+            # in this same translation unit.
+            if node.path in getattr(self, '_project_modules', ()) \
+                    and node.path not in getattr(self, 'local_modules', ()):
+                self.emit(f"import {node.path.lower()}")
             return
 
         if isinstance(node, UnsafeBlock):

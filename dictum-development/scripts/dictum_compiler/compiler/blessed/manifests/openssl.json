@@ -1,0 +1,27 @@
+{
+  "library": "openssl",
+  "link": [
+    "crypto"
+  ],
+  "headers": [
+    "openssl/rand.h"
+  ],
+  "shapes": [],
+  "imports": [
+    {
+      "c_name": "RAND_status",
+      "params": [],
+      "returns": "whole number",
+      "alias": "RAND_status"
+    }
+  ],
+  "verify": {
+    "body": "    keep s as whole number with value 0\n    call RAND_status giving s\n    print the text \"s:\" and s",
+    "expect_regex": "s:1"
+  },
+  "_verified": {
+    "c": true,
+    "cpp": true,
+    "nim": true
+  }
+}

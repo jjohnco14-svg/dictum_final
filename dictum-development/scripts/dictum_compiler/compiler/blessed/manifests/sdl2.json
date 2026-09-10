@@ -1,0 +1,35 @@
+{
+  "library": "sdl2",
+  "link": [
+    "SDL2"
+  ],
+  "headers": [
+    "SDL2/SDL.h"
+  ],
+  "shapes": [],
+  "imports": [
+    {
+      "c_name": "SDL_Init",
+      "params": [
+        "whole number"
+      ],
+      "returns": "whole number",
+      "alias": "SDL_Init"
+    },
+    {
+      "c_name": "SDL_Quit",
+      "params": [],
+      "returns": "nothing",
+      "alias": "SDL_Quit"
+    }
+  ],
+  "verify": {
+    "body": "    keep r as whole number with value 0\n    call SDL_Init with 0 giving r\n    call SDL_Quit\n    print the text \"r:\" and r",
+    "expect_regex": "r:0"
+  },
+  "_verified": {
+    "c": true,
+    "cpp": true,
+    "nim": true
+  }
+}

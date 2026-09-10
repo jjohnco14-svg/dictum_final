@@ -264,6 +264,15 @@ class StdlibTranspiler(Transpiler):
         if self.backend == 'cpp':
             emitter = CppEmitter(cpp_standard=self.cpp_standard)
             emitter.namespace = self.namespace
+        elif self.backend == 'nim':
+            # This branch was MISSING: StdlibTranspiler used to fall through
+            # to CEmitter for anything that wasn't 'cpp', so `--backend nim`
+            # through the project builder silently emitted C source into
+            # .nim files -- valid-looking output that Nim then rejected with
+            # a confusing "invalid indentation". The base Transpiler class
+            # (above in this same file) already had the nim branch; the two
+            # drifted. Silent wrong output, never an error.
+            emitter = NimEmitter()
         else:
             emitter = CEmitter()
         if self.source_path:

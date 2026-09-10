@@ -1,0 +1,33 @@
+{
+  "library": "sqlite3",
+  "link": [
+    "sqlite3"
+  ],
+  "headers": [
+    "sqlite3.h"
+  ],
+  "shapes": [],
+  "imports": [
+    {
+      "c_name": "sqlite3_libversion",
+      "params": [],
+      "returns": "text",
+      "alias": "sqlite3_libversion"
+    },
+    {
+      "c_name": "sqlite3_libversion_number",
+      "params": [],
+      "returns": "whole number",
+      "alias": "sqlite3_libversion_number"
+    }
+  ],
+  "verify": {
+    "body": "    keep v as text with value \"\"\n    call sqlite3_libversion giving v\n    print the text \"v:\" and v",
+    "expect_regex": "v:\\d+\\.\\d+\\.\\d+"
+  },
+  "_verified": {
+    "c": true,
+    "cpp": true,
+    "nim": true
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "library": "glfw",
+  "link": [
+    "glfw"
+  ],
+  "headers": [
+    "GLFW/glfw3.h"
+  ],
+  "shapes": [],
+  "imports": [
+    {
+      "c_name": "glfwGetVersionString",
+      "params": [],
+      "returns": "text",
+      "alias": "glfwGetVersionString"
+    }
+  ],
+  "verify": {
+    "body": "    keep v as text with value \"\"\n    call glfwGetVersionString giving v\n    print the text \"v:\" and v",
+    "expect_regex": "v:\\d+\\.\\d+"
+  },
+  "_verified": {
+    "c": true,
+    "cpp": true,
+    "nim": true
+  }
+}

@@ -198,10 +198,17 @@ def extend_emitter(emitter: Any) -> None:
         if hasattr(emitter, 'action_return_types'):
             emitter.action_return_types[key] = ret
             emitter.action_return_types[c_name] = ret
-    # stdlib types in C map to void* or specific typedefs
-    for t in DICTUM_STDLIB_TYPES:
-        if t not in emitter.types:
-            emitter.types[t] = f"dictum_{t}_t"
+    # stdlib types in C map to void* or specific typedefs. Guarded with
+    # hasattr for the same reason action_return_types is just above: not
+    # every emitter has this attribute. NimEmitter deliberately doesn't --
+    # it carries its own _TYPE_MAP, and C typedef names like `dictum_X_t`
+    # would be meaningless in Nim source. Without this guard, every nim
+    # build through StdlibTranspiler died with "'NimEmitter' object has no
+    # attribute 'types'".
+    if hasattr(emitter, 'types'):
+        for t in DICTUM_STDLIB_TYPES:
+            if t not in emitter.types:
+                emitter.types[t] = f"dictum_{t}_t"
 
 
 def detect_stdlib_includes(ast: List[Node]) -> Tuple[Set[str], bool]:
