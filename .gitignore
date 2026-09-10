@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+tools/bughunter
+tools/bughunter.c
+tools/bughunter_debug.c
+tools/findings/
+tools/summary.txt

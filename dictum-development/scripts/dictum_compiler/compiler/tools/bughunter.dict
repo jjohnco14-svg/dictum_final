@@ -1,0 +1,436 @@
+use Text
+use File
+
+import from C the action system takes text produces whole number as run_shell
+import from C the action getpid takes nothing produces whole number as getpid
+import from C the action dictum_flush_stdout takes nothing produces whole number as flush_stdout
+
+action test_one_backend takes mutant as text and backend as text produces whole number
+
+    keep wrote as truth value with value 0
+    call File.write with "/tmp/bughunt_candidate.dict" and mutant giving wrote
+
+    keep cmd_a as text with value ""
+    call Text.concat with "cd .. && timeout 10 python3 dictumc_cli.py /tmp/bughunt_candidate.dict --backend " and backend giving cmd_a
+    keep cmd_b as text with value ""
+    call Text.concat with cmd_a and " --compile --output /tmp/bughunt_out_" giving cmd_b
+    keep cmd_c as text with value ""
+    call Text.concat with cmd_b and backend giving cmd_c
+    keep cmd as text with value ""
+    call Text.concat with cmd_c and " > /tmp/bughunt_log.txt 2>&1; date +%s > /tmp/bughunt_now.txt" giving cmd
+
+    keep status as whole number with value 0
+    call run_shell with cmd giving status
+
+    keep log as text with value ""
+    call File.read with "/tmp/bughunt_log.txt" giving log
+
+    keep has_traceback as truth value with value 0
+    call Text.contains with log and "Traceback" giving has_traceback
+    if has_traceback is equal to 1 then
+        return 3
+    end if
+
+    keep has_internal_error as truth value with value 0
+    call Text.contains with log and "dictumc: internal error" giving has_internal_error
+    if has_internal_error is equal to 1 then
+        return 2
+    end if
+
+    keep has_dictumc_msg as truth value with value 0
+    call Text.contains with log and " error" giving has_dictumc_msg
+    if has_dictumc_msg is equal to 1 then
+        return 1
+    end if
+
+    keep has_launcher_fail as truth value with value 0
+    call Text.contains with log and "No such file" giving has_launcher_fail
+    if has_launcher_fail is equal to 1 then
+        return 4
+    end if
+
+    if status is equal to 0 then
+        return 0
+    end if
+    return 1
+end action
+
+action smoke_test_backend takes backend as text produces truth value
+
+    keep smoke_src as text with value "program smoke_test\n    print the text \"SMOKE_OK\"\nend program\n"
+    keep wrote as truth value with value 0
+    call File.write with "/tmp/bughunt_smoke.dict" and smoke_src giving wrote
+
+    keep sc_a as text with value ""
+    call Text.concat with "cd .. && timeout 60 python3 dictumc_cli.py /tmp/bughunt_smoke.dict --backend " and backend giving sc_a
+    keep sc_b as text with value ""
+    call Text.concat with sc_a and " --compile --output /tmp/bughunt_smoke_out_" giving sc_b
+    keep sc_c as text with value ""
+    call Text.concat with sc_b and backend giving sc_c
+    keep smoke_cmd as text with value ""
+    call Text.concat with sc_c and " > /tmp/bughunt_smoke_log.txt 2>&1" giving smoke_cmd
+
+    keep smoke_status as whole number with value 0
+    call run_shell with smoke_cmd giving smoke_status
+
+    if smoke_status is not equal to 0 then
+        return 0
+    end if
+
+    keep rc_a as text with value ""
+    call Text.concat with "timeout 10 /tmp/bughunt_smoke_out_" and backend giving rc_a
+    keep run_cmd as text with value ""
+    call Text.concat with rc_a and " > /tmp/bughunt_smoke_run.txt 2>&1" giving run_cmd
+
+    keep run_status as whole number with value 0
+    call run_shell with run_cmd giving run_status
+
+    keep run_out as text with value ""
+    call File.read with "/tmp/bughunt_smoke_run.txt" giving run_out
+
+    keep has_ok as truth value with value 0
+    call Text.contains with run_out and "SMOKE_OK" giving has_ok
+    return has_ok
+end action
+
+program bughunter
+
+    keep seed0 as text with value "program s0\n    keep x as whole number with value 3\n    put x plus 4 into x\n    print the text \"x:\" and x\nend program\n"
+    keep seed1 as text with value "program s1\n    keep xs as growable list of whole number with no value\n    add 1 to xs\n    add 2 to xs\n    print the text \"count:\" and the count of xs\nend program\n"
+    keep seed2 as text with value "program s2\n    keep a as whole number with value 9\n    keep b as whole number with value 2\n    if a is greater than b then\n        print the text \"yes\"\n    otherwise\n        print the text \"no\"\n    end if\nend program\n"
+
+    keep duration_str as text with value "60"
+    keep have_config as truth value with value 0
+    call File.exists with "/tmp/bughunt_duration_seconds.txt" giving have_config
+    if have_config is equal to 1 then
+        call File.read with "/tmp/bughunt_duration_seconds.txt" giving duration_str
+    end if
+    keep duration_seconds as whole number with value 60
+    call Text.to_number with duration_str giving duration_seconds
+
+    keep enabled_c as truth value with value 0
+    call smoke_test_backend with "c" giving enabled_c
+    keep enabled_cpp as truth value with value 0
+    call smoke_test_backend with "cpp" giving enabled_cpp
+    keep enabled_nim as truth value with value 0
+    call smoke_test_backend with "nim" giving enabled_nim
+    print the text "SMOKE TEST -- c:" and enabled_c and "cpp:" and enabled_cpp and "nim:" and enabled_nim
+    print the text "(1 = compiles AND runs correctly, 0 = disabled for this run, e.g. toolchain missing)"
+    keep smoke_flush_r as whole number with value 0
+    call flush_stdout giving smoke_flush_r
+
+    keep pid as whole number with value 0
+    call getpid giving pid
+    keep rng_state as whole number with value 0
+    put pid plus 12345 into rng_state
+
+    keep start_str as text with value "0"
+    keep s1 as whole number with value 0
+    call run_shell with "date +%s > /tmp/bughunt_start.txt" giving s1
+    call File.read with "/tmp/bughunt_start.txt" giving start_str
+    keep start_time as whole number with value 0
+    call Text.to_number with start_str giving start_time
+
+    keep total_runs as whole number with value 0
+    keep crashes_c as whole number with value 0
+    keep crashes_cpp as whole number with value 0
+    keep crashes_nim as whole number with value 0
+    keep internal_c as whole number with value 0
+    keep internal_cpp as whole number with value 0
+    keep internal_nim as whole number with value 0
+    keep rejects_c as whole number with value 0
+    keep rejects_cpp as whole number with value 0
+    keep rejects_nim as whole number with value 0
+    keep ok_c as whole number with value 0
+    keep ok_cpp as whole number with value 0
+    keep ok_nim as whole number with value 0
+    keep setup_fail_c as whole number with value 0
+    keep setup_fail_cpp as whole number with value 0
+    keep setup_fail_nim as whole number with value 0
+    keep findings_count as whole number with value 0
+    keep skipped_c as whole number with value 0
+    keep skipped_cpp as whole number with value 0
+    keep skipped_nim as whole number with value 0
+
+    keep elapsed as whole number with value 0
+    keep keep_going as truth value with value 1
+    keep last_heartbeat as whole number with value 0
+
+    while keep_going is equal to 1 repeat
+
+        put rng_state times 75 into rng_state
+        put rng_state plus 74 into rng_state
+        put rng_state modulo 65537 into rng_state
+        keep seed_pick as whole number with value 0
+        put rng_state modulo 3 into seed_pick
+
+        keep base as text with value ""
+        if seed_pick is equal to 0 then
+            put seed0 into base
+        end if
+        if seed_pick is equal to 1 then
+            put seed1 into base
+        end if
+        if seed_pick is equal to 2 then
+            put seed2 into base
+        end if
+
+        put rng_state times 75 into rng_state
+        put rng_state plus 74 into rng_state
+        put rng_state modulo 65537 into rng_state
+        keep mutation_pick as whole number with value 0
+        put rng_state modulo 2 into mutation_pick
+
+        keep mutant as text with value ""
+        if mutation_pick is equal to 0 then
+            call Text.replace with base and "plus" and "modulo" giving mutant
+        end if
+        if mutation_pick is equal to 1 then
+            keep base_len as whole number with value 0
+            call Text.length with base giving base_len
+            keep cut_point as whole number with value 0
+            put rng_state modulo base_len into cut_point
+            call Text.slice with base and 0 and cut_point giving mutant
+        end if
+
+        if enabled_c is equal to 1 then
+            keep result_c as whole number with value 0
+            call test_one_backend with mutant and "c" giving result_c
+            if result_c is equal to 3 then
+                put crashes_c plus 1 into crashes_c
+            end if
+            if result_c is equal to 2 then
+                put internal_c plus 1 into internal_c
+            end if
+            if result_c is equal to 1 then
+                put rejects_c plus 1 into rejects_c
+            end if
+            if result_c is equal to 0 then
+                put ok_c plus 1 into ok_c
+            end if
+            if result_c is equal to 4 then
+                put setup_fail_c plus 1 into setup_fail_c
+            end if
+            if result_c is equal to 2 then
+                put findings_count plus 1 into findings_count
+                keep fname_a as text with value ""
+                call Text.concat with "findings/case_" and "c_" giving fname_a
+                keep fcount_str as text with value ""
+                call Text.from_int with findings_count giving fcount_str
+                keep fname_b as text with value ""
+                call Text.concat with fname_a and fcount_str giving fname_b
+                keep fname as text with value ""
+                call Text.concat with fname_b and ".dict" giving fname
+                keep w1 as truth value with value 0
+                call File.write with fname and mutant giving w1
+            end if
+            if result_c is equal to 3 then
+                put findings_count plus 1 into findings_count
+                keep fname_a_x as text with value ""
+                call Text.concat with "findings/case_" and "c_" giving fname_a_x
+                keep fcount_str_x as text with value ""
+                call Text.from_int with findings_count giving fcount_str_x
+                keep fname_b_x as text with value ""
+                call Text.concat with fname_a_x and fcount_str_x giving fname_b_x
+                keep fname_x as text with value ""
+                call Text.concat with fname_b_x and ".dict" giving fname_x
+                keep w1_x as truth value with value 0
+                call File.write with fname_x and mutant giving w1_x
+            end if
+        otherwise
+            put skipped_c plus 1 into skipped_c
+        end if
+
+        if enabled_cpp is equal to 1 then
+            keep result_cpp as whole number with value 0
+            call test_one_backend with mutant and "cpp" giving result_cpp
+            if result_cpp is equal to 3 then
+                put crashes_cpp plus 1 into crashes_cpp
+            end if
+            if result_cpp is equal to 2 then
+                put internal_cpp plus 1 into internal_cpp
+            end if
+            if result_cpp is equal to 1 then
+                put rejects_cpp plus 1 into rejects_cpp
+            end if
+            if result_cpp is equal to 0 then
+                put ok_cpp plus 1 into ok_cpp
+            end if
+            if result_cpp is equal to 4 then
+                put setup_fail_cpp plus 1 into setup_fail_cpp
+            end if
+            if result_cpp is equal to 2 then
+                put findings_count plus 1 into findings_count
+                keep fname_a2 as text with value ""
+                call Text.concat with "findings/case_" and "cpp_" giving fname_a2
+                keep fcount_str2 as text with value ""
+                call Text.from_int with findings_count giving fcount_str2
+                keep fname_b2 as text with value ""
+                call Text.concat with fname_a2 and fcount_str2 giving fname_b2
+                keep fname2 as text with value ""
+                call Text.concat with fname_b2 and ".dict" giving fname2
+                keep w2 as truth value with value 0
+                call File.write with fname2 and mutant giving w2
+            end if
+            if result_cpp is equal to 3 then
+                put findings_count plus 1 into findings_count
+                keep fname_a2_x as text with value ""
+                call Text.concat with "findings/case_" and "cpp_" giving fname_a2_x
+                keep fcount_str2_x as text with value ""
+                call Text.from_int with findings_count giving fcount_str2_x
+                keep fname_b2_x as text with value ""
+                call Text.concat with fname_a2_x and fcount_str2_x giving fname_b2_x
+                keep fname2_x as text with value ""
+                call Text.concat with fname_b2_x and ".dict" giving fname2_x
+                keep w2_x as truth value with value 0
+                call File.write with fname2_x and mutant giving w2_x
+            end if
+        otherwise
+            put skipped_cpp plus 1 into skipped_cpp
+        end if
+
+        if enabled_nim is equal to 1 then
+            keep result_nim as whole number with value 0
+            call test_one_backend with mutant and "nim" giving result_nim
+            if result_nim is equal to 3 then
+                put crashes_nim plus 1 into crashes_nim
+            end if
+            if result_nim is equal to 2 then
+                put internal_nim plus 1 into internal_nim
+            end if
+            if result_nim is equal to 1 then
+                put rejects_nim plus 1 into rejects_nim
+            end if
+            if result_nim is equal to 0 then
+                put ok_nim plus 1 into ok_nim
+            end if
+            if result_nim is equal to 4 then
+                put setup_fail_nim plus 1 into setup_fail_nim
+            end if
+            if result_nim is equal to 2 then
+                put findings_count plus 1 into findings_count
+                keep fname_a3 as text with value ""
+                call Text.concat with "findings/case_" and "nim_" giving fname_a3
+                keep fcount_str3 as text with value ""
+                call Text.from_int with findings_count giving fcount_str3
+                keep fname_b3 as text with value ""
+                call Text.concat with fname_a3 and fcount_str3 giving fname_b3
+                keep fname3 as text with value ""
+                call Text.concat with fname_b3 and ".dict" giving fname3
+                keep w3 as truth value with value 0
+                call File.write with fname3 and mutant giving w3
+            end if
+            if result_nim is equal to 3 then
+                put findings_count plus 1 into findings_count
+                keep fname_a3_x as text with value ""
+                call Text.concat with "findings/case_" and "nim_" giving fname_a3_x
+                keep fcount_str3_x as text with value ""
+                call Text.from_int with findings_count giving fcount_str3_x
+                keep fname_b3_x as text with value ""
+                call Text.concat with fname_a3_x and fcount_str3_x giving fname_b3_x
+                keep fname3_x as text with value ""
+                call Text.concat with fname_b3_x and ".dict" giving fname3_x
+                keep w3_x as truth value with value 0
+                call File.write with fname3_x and mutant giving w3_x
+            end if
+        otherwise
+            put skipped_nim plus 1 into skipped_nim
+        end if
+
+        put total_runs plus 1 into total_runs
+
+        keep now_str as text with value "0"
+        call File.read with "/tmp/bughunt_now.txt" giving now_str
+        keep now_time as whole number with value 0
+        call Text.to_number with now_str giving now_time
+        put now_time minus start_time into elapsed
+
+        keep summary as text with value ""
+        call Text.concat with "elapsed_seconds:" and "" giving summary
+        keep es as text with value ""
+        call Text.from_int with elapsed giving es
+        call Text.concat with summary and es giving summary
+        call Text.concat with summary and "\ntotal_runs:" giving summary
+        keep ts as text with value ""
+        call Text.from_int with total_runs giving ts
+        call Text.concat with summary and ts giving summary
+        call Text.concat with summary and "\nfindings_count:" giving summary
+        keep fcs as text with value ""
+        call Text.from_int with findings_count giving fcs
+        call Text.concat with summary and fcs giving summary
+        call Text.concat with summary and "\nc: crashes=" giving summary
+        keep cc as text with value ""
+        call Text.from_int with crashes_c giving cc
+        call Text.concat with summary and cc giving summary
+        call Text.concat with summary and " internal=" giving summary
+        keep ic as text with value ""
+        call Text.from_int with internal_c giving ic
+        call Text.concat with summary and ic giving summary
+        call Text.concat with summary and " rejects=" giving summary
+        keep rc as text with value ""
+        call Text.from_int with rejects_c giving rc
+        call Text.concat with summary and rc giving summary
+        call Text.concat with summary and " ok=" giving summary
+        keep okc as text with value ""
+        call Text.from_int with ok_c giving okc
+        call Text.concat with summary and okc giving summary
+        call Text.concat with summary and "\ncpp: crashes=" giving summary
+        keep ccpp as text with value ""
+        call Text.from_int with crashes_cpp giving ccpp
+        call Text.concat with summary and ccpp giving summary
+        call Text.concat with summary and " internal=" giving summary
+        keep icpp as text with value ""
+        call Text.from_int with internal_cpp giving icpp
+        call Text.concat with summary and icpp giving summary
+        call Text.concat with summary and " rejects=" giving summary
+        keep rcpp as text with value ""
+        call Text.from_int with rejects_cpp giving rcpp
+        call Text.concat with summary and rcpp giving summary
+        call Text.concat with summary and " ok=" giving summary
+        keep okcpp as text with value ""
+        call Text.from_int with ok_cpp giving okcpp
+        call Text.concat with summary and okcpp giving summary
+        call Text.concat with summary and "\nnim: crashes=" giving summary
+        keep cnim as text with value ""
+        call Text.from_int with crashes_nim giving cnim
+        call Text.concat with summary and cnim giving summary
+        call Text.concat with summary and " internal=" giving summary
+        keep inim as text with value ""
+        call Text.from_int with internal_nim giving inim
+        call Text.concat with summary and inim giving summary
+        call Text.concat with summary and " rejects=" giving summary
+        keep rnim as text with value ""
+        call Text.from_int with rejects_nim giving rnim
+        call Text.concat with summary and rnim giving summary
+        call Text.concat with summary and " ok=" giving summary
+        keep oknim as text with value ""
+        call Text.from_int with ok_nim giving oknim
+        call Text.concat with summary and oknim giving summary
+        call Text.concat with summary and "\n" giving summary
+        keep w4 as truth value with value 0
+        call File.write with "summary.txt" and summary giving w4
+
+        keep since_heartbeat as whole number with value 0
+        put elapsed minus last_heartbeat into since_heartbeat
+        if since_heartbeat is greater than 30 then
+            print the text "--- progress ---"
+            print the text summary
+            keep flush_r as whole number with value 0
+            call flush_stdout giving flush_r
+            put elapsed into last_heartbeat
+        end if
+
+        if elapsed is greater than duration_seconds then
+            put 0 into keep_going
+        end if
+        if total_runs is greater than 500000 then
+            put 0 into keep_going
+        end if
+    end while
+
+    print the text "DONE. elapsed:" and elapsed and "total_runs:" and total_runs
+    print the text "findings_count:" and findings_count
+    keep final_flush_r as whole number with value 0
+    call flush_stdout giving final_flush_r
+
+end program

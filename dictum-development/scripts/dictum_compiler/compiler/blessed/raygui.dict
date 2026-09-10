@@ -1,0 +1,97 @@
+# Blessed binding for raygui 5.0 (immediate-mode GUI widgets on top of raylib)
+# Source header : raygui.h (fetched from raysan5/raygui @ master/src/raygui.h,
+#                 real prototypes checked with libclang via
+#                 scripts/generate_import_c.py -- not hand-typed from memory)
+# link          : none beyond what `use Raylib` already provides. raygui is a
+#                 single-header library; RAYGUI_IMPLEMENTATION and the wrapper
+#                 functions below live in raygui_wrappers.c, compiled once and
+#                 linked alongside your program (see that file's header comment
+#                 for the exact build command). The header itself is vendored
+#                 at blessed/thirdparty/raygui.h so you don't have to track
+#                 down a copy separately.
+#
+# Requires `use Raylib` too (raygui depends on raylib's types/window/input) and
+# the Rectangle/Color shapes from raylib.dict -- don't redeclare them here.
+#
+# THE REAL GAP THIS FILE EXISTS TO CLOSE
+# ---------------------------------------
+# raygui's interactive widgets report state through a genuine C out-parameter
+# (`int *active`, `bool *checked`, `float *value`). Dictum's FFI has no
+# address-of operator, so Dictum code can never satisfy an out-param directly
+# -- this is a real, structural gap (see GUIDE_B_triage_protocol.md), not
+# something a smarter `import from C` declaration can route around. The fix,
+# generalized from that guide's project-local pattern into a permanent blessed
+# asset: a thin C wrapper per widget (raygui_wrappers.c) that takes the
+# current value in by value, calls the real raygui function against a local
+# variable, and returns the updated value. Bind the WRAPPER, not the raw
+# GuiXxx function, for every widget listed under "Interactive widgets" below.
+#
+# WHAT'S NOT IN THIS FILE (documented, not silently skipped)
+# ------------------------------------------------------------
+#   - GuiTextBox, GuiValueBoxFloat, GuiMessageBox, GuiTextInputBox,
+#     GuiListView(Ex), GuiTabBar(Ex): these take a MUTABLE `char *` text
+#     buffer, not a read-only one. That's a different and more dangerous gap
+#     than the scalar out-param case above -- generate_import_c.py's type
+#     mapper doesn't currently distinguish `const char *` from `char *`, so
+#     binding these "directly" would compile clean and corrupt memory at
+#     runtime instead of failing loudly. Left out until Dictum has a real
+#     mutable-buffer/string-editing convention.
+#   - GuiScrollPanel, GuiColorPicker/Panel(HSV), GuiGrid: these take a
+#     Vector2*/Color*/Vector3* out-param (a whole struct, not a scalar).
+#     Same address-of problem as above, but needs its own wrapper design
+#     (struct in/out instead of scalar in/out) -- real future work, not done
+#     here.
+#   - GuiSetFont/GuiGetFont, GuiLoadStyle(FromMemory), GuiLoadIcons(FromMemory),
+#     GuiGetIcons: font handles and style/icon *data* (not simple scalars),
+#     out of scope for this pass.
+#   - GuiSetStyle/GuiGetStyle's real usefulness depends on raygui's control-ID
+#     and property-ID integer constants (DEFAULT, BUTTON, TEXT_COLOR_NORMAL,
+#     ...), which are C #defines. Same limitation as raylib's Color constants,
+#     noted in raylib.dict: `import from C` binds functions, not values, so
+#     pass the literal integer yourself (check raygui.h for the values) or
+#     build small local wrapper constants in your own program.
+
+# -- Direct bindings (no out-params; safe to call as-is) -----------------------
+import from C the action GuiEnable takes nothing produces nothing as GuiEnable
+import from C the action GuiDisable takes nothing produces nothing as GuiDisable
+import from C the action GuiLock takes nothing produces nothing as GuiLock
+import from C the action GuiUnlock takes nothing produces nothing as GuiUnlock
+import from C the action GuiIsLocked takes nothing produces truth value as GuiIsLocked
+import from C the action GuiSetAlpha takes f32 produces nothing as GuiSetAlpha
+import from C the action GuiSetState takes whole number produces nothing as GuiSetState
+import from C the action GuiGetState takes nothing produces whole number as GuiGetState
+import from C the action GuiSetStyle takes whole number and whole number and whole number produces nothing as GuiSetStyle
+import from C the action GuiGetStyle takes whole number and whole number produces whole number as GuiGetStyle
+import from C the action GuiLoadStyleDefault takes nothing produces nothing as GuiLoadStyleDefault
+import from C the action GuiEnableTooltip takes nothing produces nothing as GuiEnableTooltip
+import from C the action GuiDisableTooltip takes nothing produces nothing as GuiDisableTooltip
+import from C the action GuiSetTooltip takes text produces nothing as GuiSetTooltip
+import from C the action GuiIconText takes whole number and text produces text as GuiIconText
+import from C the action GuiSetIconScale takes whole number produces nothing as GuiSetIconScale
+import from C the action GuiDrawIcon takes whole number and whole number and whole number and whole number and Color produces nothing as GuiDrawIcon
+import from C the action GuiGetTextWidth takes text produces whole number as GuiGetTextWidth
+import from C the action GuiWindowBox takes Rectangle and text produces whole number as GuiWindowBox
+import from C the action GuiGroupBox takes Rectangle and text produces whole number as GuiGroupBox
+import from C the action GuiLine takes Rectangle and text produces whole number as GuiLine
+import from C the action GuiPanel takes Rectangle and text produces whole number as GuiPanel
+import from C the action GuiLabel takes Rectangle and text produces whole number as GuiLabel
+import from C the action GuiButton takes Rectangle and text produces whole number as GuiButton
+import from C the action GuiLabelButton takes Rectangle and text produces whole number as GuiLabelButton
+import from C the action GuiStatusBar takes Rectangle and text produces whole number as GuiStatusBar
+import from C the action GuiDummyRec takes Rectangle and text produces whole number as GuiDummyRec
+
+# -- Interactive widgets (backed by raygui_wrappers.c -- bind the wrapper
+#    symbol, never the raw GuiXxx name, for anything in this section) --------
+import from C the action dictum_raygui_toggle takes Rectangle and text and truth value produces truth value as GuiToggle
+import from C the action dictum_raygui_checkbox takes Rectangle and text and truth value produces truth value as GuiCheckBox
+import from C the action dictum_raygui_toggle_group takes Rectangle and text and whole number produces whole number as GuiToggleGroup
+import from C the action dictum_raygui_toggle_slider takes Rectangle and text and whole number produces whole number as GuiToggleSlider
+import from C the action dictum_raygui_combo_box takes Rectangle and text and whole number produces whole number as GuiComboBox
+import from C the action dictum_raygui_dropdown_box takes Rectangle and text and whole number and truth value produces whole number as GuiDropdownBox
+import from C the action dictum_raygui_spinner takes Rectangle and text and whole number and whole number and whole number and truth value produces whole number as GuiSpinner
+import from C the action dictum_raygui_value_box takes Rectangle and text and whole number and whole number and whole number and truth value produces whole number as GuiValueBox
+import from C the action dictum_raygui_slider takes Rectangle and text and text and f32 and f32 and f32 produces f32 as GuiSlider
+import from C the action dictum_raygui_slider_bar takes Rectangle and text and text and f32 and f32 and f32 produces f32 as GuiSliderBar
+import from C the action dictum_raygui_progress_bar takes Rectangle and text and text and f32 and f32 and f32 produces f32 as GuiProgressBar
+import from C the action dictum_raygui_color_bar_alpha takes Rectangle and text and f32 produces f32 as GuiColorBarAlpha
+import from C the action dictum_raygui_color_bar_hue takes Rectangle and text and f32 produces f32 as GuiColorBarHue

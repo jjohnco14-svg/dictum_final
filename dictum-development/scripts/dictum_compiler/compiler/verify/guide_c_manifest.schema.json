@@ -1,0 +1,56 @@
+{
+  "$comment": "Guide A §0 Phase 2 output. One of these lives at <project_root>/guide_c_manifest.json, alongside the prose SOURCE_OF_TRUTH_<project>.md section it's derived from. guide_c_verify.py reads THIS file, not the markdown -- the markdown is for humans/narrative, this is what the orchestrator actually executes. Keeping them in sync is Guide A's job whenever Phase 2 changes.",
+  "project": "string, e.g. cnc_vibecoder",
+  "target": "linux | windows",
+  "gui": true,
+  "binary": "path to the built binary, relative to project root",
+  "roadmap_ids": {
+    "$comment": "Every checkable claim from SOURCE_OF_TRUTH_<project>.md's Phase 1 roadmap, tagged with a short ID (R1, R2, ...) in that markdown. This list must match the IDs actually present in the markdown -- guide_a_coverage_check.py cross-checks both directions: every ID here must exist in the markdown, and every ID in the markdown must appear here or in a 'covers' array below (or be listed as a known gap).",
+    "R1": "one-line restatement of the claim, e.g. 'imports a DXF stock profile'",
+    "R2": "..."
+  },
+  "console_checks": [
+    {
+      "name": "string, short id",
+      "class": "deterministic",
+      "covers": ["R1"],
+      "args": ["list", "of", "cli", "args"],
+      "expected_stdout_file": "path to an independently-known-correct expected stdout, or null",
+      "expected_file_diff": {
+        "produced": "path the binary writes, relative to a temp run dir",
+        "expected": "path to independently-known-correct expected file"
+      },
+      "expect_exit_code": 0
+    }
+  ],
+  "gui_checks": [
+    {
+      "name": "string, short id",
+      "class": "visual",
+      "covers": ["R2"],
+      "warmup_seconds": 3,
+      "screenshot": true,
+      "recording_seconds": 0,
+      "verify_script": "verify/verify_render.py, or null to just capture without asserting"
+    }
+  ],
+  "project_specific_scripts": [
+    {
+      "name": "string, short id, e.g. grbl_dialect_check",
+      "class": "deterministic | visual",
+      "covers": ["R3"],
+      "script": "verify/grbl_check.sh",
+      "args": ["list", "of", "args"],
+      "note": "one line: what this checks and why it doesn't generalize to other projects"
+    }
+  ],
+  "known_gaps": [
+    {
+      "roadmap_id": "R4",
+      "reason": "why this can't be checked automatically yet -- explicit, not silent"
+    }
+  ],
+  "known_limitations": [
+    "string, e.g. 'T1 M6 tool-change rejected by this grbl build -- pre-existing, not a regression'"
+  ]
+}

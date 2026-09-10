@@ -1,0 +1,43 @@
+{
+  "project": "cnc_vibecoder",
+  "target": "linux",
+  "gui": true,
+  "binary": "cnc_vibecoder_linux",
+  "roadmap_ids": {
+    "R1": "material/tool/diameter sidebar", "R2": "speeds/feeds calculator",
+    "R3": "thermal model", "R4": "raygui bridge", "R5": "single merged window",
+    "R6": "compiler bug fixed (nested if/otherwise)", "R7": "DXF import",
+    "R8": "STL import + Z-level slicer", "R9": "grbl verification harness",
+    "R10": "additional raygui widgets", "R11": "DXF/STL import wired into UI",
+    "R12": "BYOK AI operation planner"
+  },
+  "console_checks": [
+    {"name": "stock_file_not_found_message", "class": "deterministic", "covers": ["R7", "R8"],
+     "args": ["--stock", "/nonexistent/path.dxf"], "expect_exit_code": 1}
+  ],
+  "gui_checks": [
+    {"name": "phase0_selecting_render", "class": "visual", "covers": ["R5"],
+     "warmup_seconds": 3, "screenshot": true},
+    {"name": "phase1_running_render", "class": "visual", "covers": ["R5", "R7", "R8"],
+     "warmup_seconds": 6, "screenshot": true,
+     "verify_script": "verify/verify_render.py", "recording_seconds": 18}
+  ],
+  "project_specific_scripts": [
+    {"name": "grbl_dialect_check", "class": "deterministic", "covers": ["R9"],
+     "script": "verify/grbl_check.sh", "args": [],
+     "note": "compiles real grbl source as the validator and feeds it the generated G-code"},
+    {"name": "click_correctness", "class": "visual", "covers": ["R1", "R4", "R10", "R11"],
+     "script": "verify/verify_click.py", "args": [],
+     "note": "pixel-diffs before/after a single click AND confirms underlying state changed"},
+    {"name": "material_calculator_values", "class": "deterministic", "covers": ["R2", "R3"],
+     "script": "verify/verify_calc.py", "args": [],
+     "note": "exact-diffs speeds/feeds/thermal outputs against independently computed values -- deterministic, belongs here not in a screenshot check"}
+  ],
+  "known_gaps": [
+    {"roadmap_id": "R6", "reason": "compiler-level fix, covered by the compiler's own R21 regression test, not this project's manifest"},
+    {"roadmap_id": "R12", "reason": "not built yet -- BYOK planner design is confirmed but unimplemented"}
+  ],
+  "known_limitations": [
+    "T1/M6 tool-change not accepted by this grbl build -- pre-existing, not a regression"
+  ]
+}
