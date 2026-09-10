@@ -1,0 +1,51 @@
+{
+  "elapsed_seconds": 20,
+  "total_runs": 130,
+  "findings_count": 0,
+  "enabled": {
+    "sqlite3": true,
+    "openssl": true,
+    "sdl2": true,
+    "glfw": true,
+    "raylib": true,
+    "raygui": true
+  },
+  "counts": {
+    "sqlite3": {
+      "ok": 12,
+      "reject": 10,
+      "internal": 0,
+      "crash": 0
+    },
+    "openssl": {
+      "ok": 10,
+      "reject": 12,
+      "internal": 0,
+      "crash": 0
+    },
+    "sdl2": {
+      "ok": 12,
+      "reject": 10,
+      "internal": 0,
+      "crash": 0
+    },
+    "glfw": {
+      "ok": 10,
+      "reject": 12,
+      "internal": 0,
+      "crash": 0
+    },
+    "raylib": {
+      "ok": 6,
+      "reject": 15,
+      "internal": 0,
+      "crash": 0
+    },
+    "raygui": {
+      "ok": 10,
+      "reject": 11,
+      "internal": 0,
+      "crash": 0
+    }
+  }
+}
