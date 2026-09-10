@@ -215,7 +215,7 @@ class DictumGrammar:
         'call','run','defer','release',
         'is','equal','to','not','greater','less','than','or','at','least','most','empty',
         'sum','difference','product','quotient','remainder','divided','by',
-        'modulo','times','count','length','bitwise','and','or','xor','left','right',
+        'modulo','times','count','length','address','bitwise','and','or','xor','left','right',
         'shift','of','tanh','true','false','nothing','newline',
         'holds','takes','produces','alone','holding','plus','minus',
         'unique','shared','weak','raw','handle','const','ref','move',

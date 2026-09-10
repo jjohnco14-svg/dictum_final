@@ -718,7 +718,7 @@ class Parser:
             self.advance()
             _PREFIX_OPS = {
                 'sum', 'difference', 'product', 'quotient', 'remainder',
-                'count', 'length', 'bitwise', 'left', 'right', 'tanh',
+                'address', 'count', 'length', 'bitwise', 'left', 'right', 'tanh',
                 'square', 'power', 'exponential', 'sine', 'cosine'
             }
             if self.cur().type == TokenType.WORD and self.cur().value in _PREFIX_OPS:
@@ -843,6 +843,13 @@ class Parser:
             a = self.parse_expression(); self.expect_word('by')
             b = self.parse_expression()
             return BinaryOp(op='>>', left=a, right=b, line=line)
+        elif nxt == 'address':
+            # `the address of X` -- the address-of operator. Its absence was
+            # a hard blocker for real FFI: sqlite3_open takes `sqlite3 **ppDb`
+            # and countless C APIs use out-parameters, so those bindings were
+            # "blessed" yet uncallable from .dict source without a hand-written
+            # C shim. Parsed exactly like `the count of X`.
+            return _one('addressof')
         elif nxt == 'count':     return _one('count')
         elif nxt == 'length':    return _one('length')
         elif nxt == 'tanh':      return _one('tanh')

@@ -4747,6 +4747,49 @@ def test_r82_header_completeness(tmp):
     return True, "ok -- every type in the vocabulary survives header generation"
 
 
+@regression("R83 `the address of X` -- the address-of operator, closing the "
+            "FFI gap that made C out-parameter APIs uncallable. sqlite3_open "
+            "takes `sqlite3 **ppDb`, so it was BLESSED YET UNCALLABLE from "
+            ".dict source: a real app had to bind a hand-written C shim "
+            "instead. This test calls sqlite3_open DIRECTLY with no shim on "
+            "all three backends and checks it returns SQLITE_OK and really "
+            "creates the database file. Also covers the validator rule that "
+            "makes it usable at all: taking the ADDRESS of an uninitialized "
+            "variable is not a READ of it -- that is precisely what an "
+            "out-parameter is for -- so it must not raise 'Use of "
+            "uninitialized variable'")
+def test_r83_address_of_operator(tmp):
+    src_dir = os.path.join(HERE, "tests", "addressof")
+    if not os.path.isdir(src_dir):
+        return None, "SKIP: tests/addressof fixtures not present"
+    if not os.path.exists("/usr/include/sqlite3.h"):
+        return None, "SKIP: libsqlite3-dev not available"
+    src_tpl = open(os.path.join(src_dir, "noshim.dict")).read()
+
+    for backend in ("c", "cpp", "nim"):
+        if backend == "nim" and shutil.which("nim") is None:
+            continue
+        db = os.path.join(tmp, f"t_{backend}.db")
+        src = os.path.join(tmp, f"noshim_{backend}.dict")
+        open(src, "w").write(src_tpl.replace("/tmp/gaps/noshim.db", db))
+        out_bin = os.path.join(tmp, f"noshim_{backend}")
+        r = subprocess.run(
+            [sys.executable, CLI, src, "--backend", backend, "--compile",
+             "--output", out_bin, "--link", "sqlite3"],
+            capture_output=True, text=True, timeout=180, cwd=HERE)
+        if r.returncode != 0:
+            return False, (f"[{backend}] address-of build failed -- the operator "
+                            f"or its validator exemption regressed: "
+                            f"{(r.stdout + r.stderr)[-400:]}")
+        run = _run(out_bin, timeout=20)
+        if "open_rc=0" not in run.stdout:
+            return False, (f"[{backend}] sqlite3_open did not return SQLITE_OK "
+                            f"through the address-of out-parameter: {run.stdout!r}")
+        if not os.path.exists(db):
+            return False, f"[{backend}] reported success but created no database"
+    return True, "ok -- sqlite3_open called directly, no C shim, on all backends"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

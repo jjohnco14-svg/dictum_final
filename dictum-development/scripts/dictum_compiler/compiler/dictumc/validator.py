@@ -1112,6 +1112,24 @@ class Validator:
             return left_type
         elif isinstance(node, UnaryOp):
             if node.op in ('count', 'length'): return "count"
+            if node.op == 'addressof':
+                # Taking the ADDRESS of a variable is not a READ of it --
+                # that is the entire point of a C out-parameter
+                # (`sqlite3_open(path, &db)` fills db in). Inferring the
+                # operand normally raised "Use of uninitialized variable",
+                # which made address-of useless for the exact case it
+                # exists to serve. Mark it initialized instead: after the
+                # callee writes through the pointer, it genuinely is.
+                if isinstance(node.operand, Identifier):
+                    info = scope.resolve(node.operand.name)
+                    if info is not None:
+                        info.initialized = True
+                    else:
+                        self.error(f"Use of undeclared variable "
+                                   f"'{node.operand.name}'", node.line)
+                else:
+                    self.infer_type(node.operand, scope)
+                return "opaque pointer"
             if node.op in ('tanh', 'sqrt', 'exp', 'sin', 'cos'): return "fractional number"
             if node.op == 'room_for': return "handle to bytes"
             return self.check_expression(node.operand, scope)

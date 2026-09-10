@@ -999,6 +999,12 @@ class CEmitter:
         elif isinstance(node, UnaryOp):
             op = node.op
             operand = self.expr_to_c(node.operand)
+            if op == "addressof":
+                # `the address of X` -> &X. Its absence was a hard blocker
+                # for real FFI: C out-parameter APIs (sqlite3_open's
+                # `sqlite3 **ppDb`, and much of libc) were "blessed" yet
+                # uncallable from .dict source without a hand-written C shim.
+                return f"(void*)&{operand}"
             if op == "count":
                 # BUGFIX (list-of-T action parameters): a list-typed
                 # parameter is now `T* pname` with a `size_t pname_count`

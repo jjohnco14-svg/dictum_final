@@ -338,6 +338,10 @@ class NimEmitter:
             # function-style unary ops as real Nim calls here instead
             # of as a prefix operator. See emit_nim.py regression:
             # R-NIM-5.
+            if node.op == "addressof":
+                # Nim's `addr` requires a mutable location, which is exactly
+                # what an out-parameter needs; cast to pointer for FFI.
+                return f"cast[pointer](addr({self.expr_to_nim(node.operand)}))"
             if node.op in ("count", "length"):
                 operand = self.expr_to_nim(node.operand)
                 return f"len({operand})"

@@ -669,6 +669,10 @@ class CppEmitter:
             return f"({left} {node.op} {right})"
         elif isinstance(node, UnaryOp):
             op = node.op; operand = self.expr_to_cpp(node.operand)
+            if op == "addressof":
+                # `the address of X` -> &X. See emit_c.py for why this
+                # matters: C out-parameter APIs were blessed yet uncallable.
+                return f"(void*)&{operand}"
             if op == "count":
                 if isinstance(node.operand, Identifier):
                     raw_t = self.declared_vars.get(node.operand.name)

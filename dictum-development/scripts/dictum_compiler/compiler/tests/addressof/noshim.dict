@@ -1,0 +1,11 @@
+import from C the action sqlite3_open takes text and opaque pointer produces whole number as sqlite3_open
+import from C the action sqlite3_close takes opaque pointer produces whole number as sqlite3_close
+
+program noshim
+    keep db as opaque pointer with no value
+    keep rc as whole number with value 0
+    call sqlite3_open with "/tmp/gaps/noshim.db" and the address of db giving rc
+    print the text "open_rc=" and rc
+    call sqlite3_close with db giving rc
+    print the text "close_rc=" and rc
+end program
