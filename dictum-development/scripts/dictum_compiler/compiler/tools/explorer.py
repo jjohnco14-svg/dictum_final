@@ -420,6 +420,10 @@ def main() -> int:
     ap.add_argument("--report", action="store_true")
     ap.add_argument("--reset", action="store_true")
     ap.add_argument("--seed", type=int)
+    ap.add_argument("--pack", type=int, default=8,
+                    help="fragments per program. A program with N fragments "
+                         "covers C(N,2) pairs at once, so this is the main "
+                         "speed lever on a single core. --pack 1 disables it.")
     args = ap.parse_args()
 
     if args.reset and os.path.exists(COVERAGE_PATH):
@@ -472,7 +476,43 @@ def main() -> int:
     try:
         for n in range(args.count):
             kind = "pair"
-            if untried:
+            if args.pack > 1 and (untried or untried_triples):
+                # PACKING: a program with N fragments exercises C(N,2) pairs
+                # SIMULTANEOUSLY. At ~4s per program (3 real compilers on a
+                # single core, nim alone being 2.2s), covering 190 pairs one
+                # at a time costs ~12 minutes; packing 8 fragments covers 28
+                # pairs per program and does it in ~1. On a 1-CPU box this
+                # algorithmic win dwarfs anything parallelism could give.
+                #
+                # Greedy set-cover: repeatedly add whichever fragment brings
+                # the most currently-untried pairs.
+                want = set(untried)
+                chosen = []
+                pool = list(frags)
+                rng.shuffle(pool)
+                while len(chosen) < args.pack and pool:
+                    best, best_gain = None, -1
+                    have = {f.name for f in chosen}
+                    for cand in pool:
+                        if cand.name in have:
+                            continue
+                        gain = sum(1 for h in have
+                                   if "|".join(sorted((h, cand.name))) in want)
+                        if not chosen:
+                            gain = 0   # first pick is free
+                        if gain > best_gain:
+                            best, best_gain = cand, gain
+                    if best is None:
+                        break
+                    chosen.append(best)
+                    pool.remove(best)
+                covered_now = []
+                for a2, b2 in itertools.combinations(sorted(f.name for f in chosen), 2):
+                    k = f"{a2}|{b2}"
+                    covered_now.append(k)
+                pair = f"packed({len(chosen)}f/{len(covered_now)}p)"
+                packed_pairs = covered_now
+            elif untried:
                 pair = untried.pop()
                 chosen = [by_name[x] for x in pair.split("|")]
                 extra = rng.choice(frags)
@@ -498,8 +538,19 @@ def main() -> int:
             wd = os.path.join(workroot, f"case{n}")
             verdict, detail = run_case(main_src, module_src, expected, wd, rng)
 
-            bucket = cov["triples"] if kind == "triple" else cov["pairs"]
-            bucket[pair] = bucket.get(pair, 0) + 1
+            if pair.startswith("packed("):
+                for k in packed_pairs:
+                    cov["pairs"][k] = cov["pairs"].get(k, 0) + 1
+                for tri in itertools.combinations(
+                        sorted(f.name for f in chosen), 3):
+                    tk = "|".join(tri)
+                    cov["triples"][tk] = cov["triples"].get(tk, 0) + 1
+                untried = [q for q in untried if q not in set(packed_pairs)]
+                untried_triples = [q for q in untried_triples
+                                   if not cov["triples"].get(q)]
+            else:
+                bucket = cov["triples"] if kind == "triple" else cov["pairs"]
+                bucket[pair] = bucket.get(pair, 0) + 1
             # A triple also exercises its three constituent pairs.
             if kind == "triple":
                 parts = sorted(pair.split("|"))
