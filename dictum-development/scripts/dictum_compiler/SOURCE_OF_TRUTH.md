@@ -1,7 +1,7 @@
 # Dictum — Source of Truth
 
 Canonical reference for where each fact about the Dictum language actually
-lives, and what's been verified true about the compiler as of v0.1.38.
+lives, and what has been verified true about the compiler as of v0.1.52.
 Written because the project's core recurring failure mode has been the
 same fact about the language living in more than one hand-maintained
 place with no sync mechanism — this document is meant to prevent a new
@@ -1457,3 +1457,233 @@ Dictum-side code) and also wasn't attempted this session.
 
 Version at time of writing: **0.1.51**.
 
+
+---
+
+## 31. Reliability pass: 27 real bugs fixed, 4 language gaps closed, and a testing methodology that actually finds unknown bugs (v0.1.52)
+
+This section records a long session whose *method* matters as much as its
+fixes. The short version: **mutation fuzzing found almost nothing, while
+writing real programs found bugs immediately** — and understanding why
+changed how the tooling is built.
+
+### 31a. The methodology finding (read this before adding more fuzzers)
+
+Four mutation fuzzers were built and run (`tools/bughunter.dict` native +
+time-based, `multifile_fuzzer.py`, `blessed_library_fuzzer.py`,
+`differential_fuzzer.py`). A ~4.2-hour campaign on Kaggle did 5,627 rounds
+across c/cpp/nim and found **zero** crashes.
+
+Then one hand-written 3-module program found two real bugs in minutes.
+
+The reason is structural, and worth stating plainly:
+
+- **Mutators explore variations of code someone already wrote.** They cannot
+  reach a construct nobody put in a seed.
+- **A generator written *after* fixing bugs encodes the fixes.**
+  `tools/progforge.c` first ran 100/100 clean — but its vocabulary was
+  exactly the constructs whose bugs had just been fixed. 100/100 meant "my
+  patches hold", not "the compiler is correct". This is confirmation bias
+  with a build script.
+- **Real programs combine features nobody chose to combine.** A module
+  exporting *both* an int- and a text-returning action; a variable
+  legitimately named `out`; a `for each` body that ignores its loop
+  variable. None were malicious — all were ordinary.
+
+What actually found unknown bugs, in order of yield:
+
+1. **Writing a real application** (`tests/notesapp`, a SQLite-backed notes
+   app) — 2 bugs.
+2. **Invariant checking** (`tools/header_completeness.py`) — caught a whole
+   CLASS at once, including a third instance (`byte`) nobody had found.
+3. **Composing features while implementing a gap** — e.g. testing `Math`
+   after fixing the Nim stdlib exposed a completely separate link-time trap.
+4. **Differential + value-checking** (`differential_fuzzer.py`, progforge's
+   self-computed expected output) — catches *wrong answers*, which a
+   "did it crash?" check never can.
+5. **Mutation fuzzing** — near-zero yield once the above were in place.
+
+**Corollary that cost real time:** three "bugs" in the first triage run were
+*my own syntax errors*, not compiler bugs (`repeat N times` needs `using
+COUNTER`; map syntax is `put V at K in M`; `item` is reserved). Check the
+language reference before blaming the compiler — the surface is easy to
+misremember.
+
+### 31b. Bugs found and fixed (all have permanent regression tests)
+
+Compiler/codegen:
+
+| # | Bug | Scope |
+|---|-----|-------|
+| 1 | Stray `dictum_main()` call with no definition | **Broke linking for EVERY program**, c+cpp |
+| 2 | `dictumc_cli.py --compile` missing `-I <runtime>` | Any stdlib-header program |
+| 3 | Intermediate C/C++ source deleted, not persisted | Blocked ASan/inspection |
+| 4 | `Text.concat` mapped to raw `strcat` | **Real segfault** (buffer overflow) |
+| 5 | `Text.to_number` missing from `_MODULE_CALL_MAP` | Link failure, all backends |
+| 6 | `realloc` void* casts missing in 2 runtime headers | Broke `dictum_text.h` under C++ entirely |
+| 7 | `dictum_core.h` not self-sufficient (no `stdint.h`) | Broke every hand-written test harness |
+| 8 | `end program`/`end module`/`end if` were OPTIONAL | **Malformed source emitted a working binary** |
+| 9 | Nim backend used a RANDOM tempfile as module name | **Nondeterministic** failure (`__` rejected) |
+| 10 | Nim FFI params: types parsed as `<type> <name>` | Silent ABI arity mismatch |
+| 11 | `StdlibTranspiler` had no `nim` branch | `--backend nim` **silently emitted C** |
+| 12 | `for each` over a growable list emitted array code | c only |
+| 13 | `for each` loop var tripped `-Werror=unused-variable` | c+cpp |
+
+Multi-file / project builder:
+
+| # | Bug | Scope |
+|---|-----|-------|
+| 14 | `--backend` silently overridden by stale manifest | **Silent wrong output** |
+| 15 | `_DEFAULT_SOURCE` pushed after an `#include` | Module files |
+| 16 | Cross-file `use` include emitted *inside* `main()` | cpp only (most vexing parse) |
+| 17 | Duplicate FFI symbol definitions | Multi-file |
+| 18 | **No `--link` option AT ALL** | Multi-file + any C library could not link |
+| 19 | C++ `extern "C"` without `noexcept` | ONE libc binding broke a whole project |
+| 20 | Shape typedef emitted twice | Multi-file c |
+| 21 | Runtime include path missing from Makefile | Multi-file + stdlib |
+| 22 | Build dir got EMPTY STUB core/error headers that **shadowed** the real ones | Multi-file |
+| 23 | `generate_header` return-type whitelist dropped `text`, `void*`, `byte` | **A whole bug CLASS** — see 31c |
+
+Tooling (found by dogfooding the tools themselves):
+
+| # | Bug | Scope |
+|---|-----|-------|
+| 24 | `libmanifest add` called the generator with wrong args | `add` never worked |
+| 25 | `libmanifest` probed GUESSED registry function names | **Verdicts never persisted** — registry stayed empty while verify said PASS |
+| 26 | Fuzzer smoke-test failures reported as silent zeros | An all-zero run looked like a clean result |
+| 27 | Per-backend build failure absorbed if others agreed | Exactly how a backend-specific bug hides |
+
+### 31c. The bug CLASS, and how it is now detected mechanically
+
+Bugs #23 (three instances: `text`, `opaque pointer`, `byte`) were ONE
+invariant violation:
+
+> every action DEFINED in a module's generated source
+> must be DECLARED in that module's generated header
+
+`generate_header` matched return types against a **hardcoded whitelist**, so
+any type not on it vanished silently. It hides well: int-returning actions in
+the same module declare fine, so only a module exporting an unlisted type AND
+a caller in another file reveals it — then only as implicit-int at the call
+site.
+
+`tools/header_completeness.py` generates one module exporting an action for
+**every type in the vocabulary** and diffs defined-vs-declared. Reverting the
+fixes makes it report all three, including `byte` — which an earlier fix had
+covered *by accident*. One run covers the class, including types added later.
+(R82.)
+
+### 31d. Four language gaps closed
+
+1. **`the address of X`** — C out-parameter APIs were *blessed yet
+   uncallable*: `sqlite3_open` takes `sqlite3 **ppDb`, so a real app had to
+   bind a hand-written C shim. Now parses like `the count of X`; emits
+   `(void*)&X` (c/cpp) and `cast[pointer](addr(X))` (nim). The enabling
+   detail: taking the ADDRESS of an uninitialized variable is **not a READ**
+   — that is what an out-parameter is for — so the operand is exempt from
+   "Use of uninitialized variable". Verified: `sqlite3_open` called directly,
+   no shim, on all three backends. (R83.)
+
+2. **Growable lists of any type** — the C runtime hardcoded `int32_t`, making
+   dynamic collections a *C-backend* restriction masquerading as a language
+   one (C++/Nim already supported every type). `DICTUM_GLIST_DEFINE` now
+   generates a real typed struct per element type. Every call site had been
+   hardcoding `dictum_glist_`. Found while doing it: the validator compared
+   element types by EXACT STRING, rejecting `add 1.5 to <list of decimal
+   number>` because `fractional number` != `decimal number` — **documented
+   synonyms**. (R42 updated.)
+
+3. **Nim stdlib bridge** — all 92 stdlib functions were C-only, so ANY
+   `use Text`/`File`/`Math` failed on nim. This single gap, not scattered
+   features, is what made nim second-class. `dictumc/nim_stdlib.py` bridges
+   40 functions onto Nim's OWN stdlib, emitting only the procs a program
+   uses. Edge-case behaviour is matched to the C runtime deliberately
+   (`Text.to_number` → 0 on garbage; `File.read` → "" on missing) so the
+   backends *agree* rather than both merely "working". **Fixing it exposed a
+   separate bug**: 33 of 92 stdlib functions resolve only via
+   `extend_emitter()`, which only `StdlibTranspiler` calls — so without an
+   undiscoverable `--stdlib` flag, `use Math` parsed, transpiled, and died at
+   LINK time with `undefined reference to Math_sqrt`. Now auto-enabled. (R84.)
+
+4. **Higher-order actions** — the function-TYPE annotation was already
+   documented AND parsed, but an action name in value position resolved only
+   against variables, so the type existed with no way to produce a value of
+   it. Fixing the validator exposed one bug per backend, and the C++ one is
+   the most instructive of the whole session: it returned a **hardcoded
+   `std::function<bool(int32_t)>` for every signature**, which compiled
+   cleanly and **silently returned wrong answers** (42 → `true` → printed 1).
+   A hard failure would have been kinder. R85 asserts the VALUE, not just a
+   successful build, which is why it catches that. (R85.)
+
+### 31e. New tooling
+
+| Tool | Purpose |
+|------|---------|
+| `tools/progforge.c` | Native generative tester. Computes expected output ITSELF, so it checks CORRECTNESS, not just "did it crash". Recursive nesting, auto-minimization (delta debugging) of failures. |
+| `tools/differential_fuzzer.py` | Same source → all 3 backends; flags *disagreement*. Found bugs #8 and #9. |
+| `tools/triage_corpus.py` | Runs a corpus of real programs, COLLECTS failures without fixing, groups by which backends failed together — a group failing on exactly one backend usually shares ONE root cause. |
+| `tools/header_completeness.py` | Invariant checker for the bug class in 31c. |
+| `tools/multifile_fuzzer.py` | Multi-file + cross-file FFI surface. |
+| `tools/blessed_library_fuzzer.py` | The 6 blessed library bindings. |
+| `tools/libmanifest.py` | One manifest per library, verified across all backends (see 31f). |
+| `tools/dictation.py` | Gated procedure for adding grammar (see 31g). |
+| `tools/synthetic_guide_a.py` | Generates Guide A Phase 1+2 for corpus entries. |
+
+### 31f. Library integration is now a 3-command workflow
+
+```
+libmanifest.py add zlib --header /usr/include/zlib.h --link z
+#   (fill in the manifest's `verify` block)
+libmanifest.py verify zlib     # REALLY compiles + links + runs on c/cpp/nim
+libmanifest.py emit zlib       # writes the .dict binding
+```
+
+`verify` never records a pass it did not observe. Verdicts persist to
+`import_c_registry` with real provenance (actual compiler version string,
+timestamp, observed output). `is_blessed()` returns **None** for a target
+never tried, so unverified reads as UNKNOWN rather than as a pass.
+
+Proven by blessing a genuinely new library (zlib) end-to-end. **6 libraries
+now verified on all 3 backends**: sqlite3, openssl, sdl2, glfw, raylib, zlib.
+
+A detail that shows the system working: an early batch run without Xvfb
+recorded raylib `blessed=false` on all targets — `InitWindow` genuinely
+failed without a display, and the registry recorded **what it observed**.
+
+### 31g. Adding grammar is now a gated procedure
+
+`proposed → check (COMPATIBILITY) → compatible → test (FUNCTIONALITY) → working`
+
+- **check**: keyword/type collisions, whether the word currently parses as an
+  identifier (promoting it would change existing programs), suite still clean.
+- **test**: compiles, runs, and **AGREES** on all three backends.
+
+Passing `check` does NOT make a dictation usable — compatibility is not
+function. R80 asserts the gates stay independent, because if `check` were
+ever enough the whole procedure would be theatre.
+
+### 31h. State at end of session
+
+- Regression suite **55 → 86 tests**, all passing, **zero skips**
+  (libclang and Nim installed, unlocking 10 previously-skipped tests).
+- Every new test **proven to catch its own regression** by re-breaking the fix.
+- Multi-file works on **all three backends** (nim was hardcoded out).
+- A real SQLite-backed application (`tests/notesapp`) builds and runs
+  identically on c/cpp/nim, database contents independently verified.
+
+### 31i. Still open (deliberately)
+
+- **8 stdlib families unimplemented**: `LLM.*`, `Robot.*`, `Speech.*` —
+  reserved placeholders needing real external engines. Not bugs.
+- **Nim stdlib bridge covers 40 of 92** — Text/Math/File/Console. Json, Http,
+  Net, Tls, Thread, Mutex are not bridged; a missing entry is a clear error
+  rather than a broken call.
+- **No autonomous spec→verified-code loop.** Every fix this session needed a
+  human or AI reading a real compiler error.
+- **`emit_c.py` / `emit_cpp.py` remain hand-written twins.** Two more drift
+  bugs this session (#16, and the hardcoded `std::function`). This is a
+  standing risk, not a closed one.
+- **Kaggle runs cannot be monitored from the tooling side** (`kernels.get`
+  denied); results must be read from the notebook UI.
+
+Version at time of writing: **0.1.52**.
