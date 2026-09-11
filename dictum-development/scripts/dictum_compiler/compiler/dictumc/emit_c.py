@@ -1631,9 +1631,25 @@ class CEmitter:
                 self.emit("#include <string.h>")
                 self.emit("#include <assert.h>")
                 self.emit("#include <math.h>")
-                if self._has_produce_failure(node):
+                # The Module path must gate its runtime includes on the
+                # SAME conditions as the Program path. It only checked
+                # _has_produce_failure, so a module using `attempt` (or a
+                # growable list, or a map/set) emitted calls to
+                # dictum_error_clear / dictum_glist_add with no header --
+                # "implicit declaration of function 'dictum_error_clear'".
+                # A module-only file has NO Program node, so the Program
+                # branch's include logic never runs for it at all. Found by
+                # tools/edges.py placing `attempt` in the in_module context.
+                if (self._has_produce_failure(node)
+                        or self._has_attempt_nodes(node)
+                        or self._file_has_produce_failure
+                        or self._file_has_attempt_nodes):
                     self.emit('#include "dictum_core.h"')
                     self.emit('#include "dictum_error.h"')
+                if self._has_growable_list(node) or self._file_has_growable_list:
+                    self.emit('#include "dictum_glist.h"')
+                if self._has_gset_or_map(node) or self._file_has_gset_or_map:
+                    self.emit('#include "dictum_gset.h"')
                 self.emit("")
                 self.emit("typedef const char* dictum_text;")
                 self.emit("")

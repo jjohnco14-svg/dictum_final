@@ -5200,6 +5200,69 @@ def test_r91_runtime_include_gated_on_whole_file(tmp):
     return True, "ok -- collections work inside actions on all backends"
 
 
+@regression("R92 a MODULE-ONLY file must get the same runtime #includes as "
+            "a program file. A module-only translation unit has NO Program "
+            "node, so the Program branch's include logic never ran for it; "
+            "the Module branch checked only _has_produce_failure. A module "
+            "using `attempt` therefore emitted dictum_error_clear() with no "
+            "header: \"implicit declaration of function "
+            "'dictum_error_clear'\". Found by tools/edges.py placing an "
+            "ordinary feature (attempt) in the in_module CONTEXT -- the "
+            "feature works fine in a program, and only the context differs")
+def test_r92_module_only_runtime_includes(tmp):
+    work = os.path.join(tmp, "modatt")
+    os.makedirs(work)
+    open(os.path.join(work, "helper.dict"), "w").write(
+        'module helper\n'
+        '    action risky takes nothing produces whole number\n'
+        '        keep a as whole number with value 0\n'
+        '        attempt\n'
+        '            put 42 into a\n'
+        '        on success\n'
+        '            put a into a\n'
+        '        on failure\n'
+        '            put 0 into a\n'
+        '        end attempt\n'
+        '        return a\n'
+        '    end action\n'
+        'end module\n')
+    open(os.path.join(work, "main.dict"), "w").write(
+        'program main\n'
+        '    use helper\n'
+        '    keep v as whole number with value 0\n'
+        '    call helper.risky giving v\n'
+        '    print the text "r=" and v\n'
+        'end program\n')
+
+    for backend in ("c", "cpp", "nim"):
+        if backend == "nim" and shutil.which("nim") is None:
+            continue
+        mani = os.path.join(work, "dictum.project.json")
+        if os.path.exists(mani):
+            os.remove(mani)
+        out_dir = os.path.join(work, f"b_{backend}")
+        r = subprocess.run(
+            [sys.executable, PROJECT_BUILDER, work, "--backend", backend, "--out", out_dir],
+            capture_output=True, text=True, timeout=200, cwd=HERE)
+        if r.returncode != 0:
+            return False, f"[{backend}] build failed: {r.stdout}\n{r.stderr}"
+        if backend == "nim":
+            rb = subprocess.run(["sh", os.path.join(out_dir, "build.sh")],
+                                 capture_output=True, text=True, timeout=420, cwd=out_dir)
+        else:
+            rb = subprocess.run(["make"], capture_output=True, text=True,
+                                 timeout=200, cwd=out_dir)
+        if rb.returncode != 0:
+            combined = rb.stdout + rb.stderr
+            hint = (" -- a module-only file is missing its runtime #includes"
+                    if "implicit declaration" in combined else "")
+            return False, f"[{backend}] compile failed{hint}: {combined[-300:]}"
+        run = _run(os.path.join(out_dir, "main"), timeout=20)
+        if "r=42" not in run.stdout:
+            return False, f"[{backend}] unexpected output: {run.stdout!r}"
+    return True, "ok -- attempt inside a module works on all backends"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

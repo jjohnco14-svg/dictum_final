@@ -64,39 +64,55 @@ BACKENDS = ("c", "cpp", "nim")
 # `uses` are `use X` lines the feature needs -- these matter enormously,
 # because a stdlib dependency inside a MODULE is what triggered the ODR bug.
 # ---------------------------------------------------------------------------
-FEATURES = {
+def _mk_features(rng):
+    """Values are RANDOMISED per run. Previously every cell used hardcoded
+    numbers, so the whole matrix produced byte-identical programs on every
+    invocation -- once green it stayed green forever and could never
+    surface a new bug. Randomising means even a re-tested cell is a
+    different program (the format-spec bug needed a particular variable
+    NAME; value-dependent bugs are real)."""
+    a1 = rng.randint(5, 60)
+    a2 = rng.randint(5, 60)
+    word = rng.choice(["abcdefgh", "hello", "dictum", "xyzzy", "sample"])
+    sq = rng.choice([[4.0, 2.0], [9.0, 3.0], [16.0, 4.0], [25.0, 5.0],
+                     [36.0, 6.0], [81.0, 9.0]])
+    n1, n2, n3 = (rng.randint(1, 30) for _ in range(3))
+    w, h = rng.randint(2, 12), rng.randint(2, 12)
+    resv = rng.choice(["out", "type", "end", "method", "block", "proc", "ref"])
+    rv = rng.randint(2, 40)
+    return {
     "arith": {
         "uses": [],
-        "setup": ['keep a_F as whole number with value 20'],
-        "work":  ['put a_F plus 22 into a_F'],
-        "result": ("a_F", "whole number"), "expect": "42",
+        "setup": [f'keep a_F as whole number with value {a1}'],
+        "work":  [f'put a_F plus {a2} into a_F'],
+        "result": ("a_F", "whole number"), "expect": str(a1 + a2),
     },
     "text_len": {
         "uses": ["Text"],
-        "setup": ['keep s_F as text with value "abcdefgh"',
+        "setup": [f'keep s_F as text with value "{word}"',
                   'keep a_F as whole number with value 0'],
         "work":  ['call Text.length with s_F giving a_F'],
-        "result": ("a_F", "whole number"), "expect": "8",
+        "result": ("a_F", "whole number"), "expect": str(len(word)),
     },
     "text_upper": {
         "uses": ["Text"],
-        "setup": ['keep s_F as text with value "xyz"',
+        "setup": [f'keep s_F as text with value "{word}"',
                   'keep t_F as text with value ""'],
         "work":  ['call Text.to_upper with s_F giving t_F'],
-        "result": ("t_F", "text"), "expect": "XYZ",
+        "result": ("t_F", "text"), "expect": word.upper(),
     },
     "math_sqrt": {
         "uses": ["Math"],
-        "setup": ['keep d_F as decimal number with value 81.0',
+        "setup": [f'keep d_F as decimal number with value {sq[0]}',
                   'keep r_F as decimal number with value 0.0'],
         "work":  ['call Math.sqrt with d_F giving r_F'],
-        "result": ("r_F", "decimal number"), "expect": "9.000000",
+        "result": ("r_F", "decimal number"), "expect": f"{sq[1]:.6f}",
     },
     "glist": {
         "uses": [],
-        "setup": ['keep g_F as growable list of whole number with no value',
-                  'add 4 to g_F', 'add 5 to g_F', 'add 6 to g_F',
-                  'keep a_F as whole number with value 0'],
+        "setup": ['keep g_F as growable list of whole number with no value'] +
+                 [f'add {v} to g_F' for v in (n1, n2, n3)] +
+                 ['keep a_F as whole number with value 0'],
         "work":  ['put the count of g_F into a_F'],
         "result": ("a_F", "whole number"), "expect": "3",
     },
@@ -111,40 +127,77 @@ FEATURES = {
     "foreach": {
         "uses": [],
         "setup": ['keep fl_F as growable list of whole number with no value',
-                  'add 7 to fl_F', 'add 8 to fl_F',
+                  f'add {n1} to fl_F', f'add {n2} to fl_F',
                   'keep a_F as whole number with value 0'],
         "work":  ['for each e_F in fl_F repeat',
                   '    put a_F plus e_F into a_F',
                   'end for'],
-        "result": ("a_F", "whole number"), "expect": "15",
+        "result": ("a_F", "whole number"), "expect": str(n1 + n2),
     },
     "shape": {
         "uses": [],
         "shape_decl": 'shape Sh_F holds:\n    w as whole number\n    h as whole number\nend shape',
-        "setup": ['keep sh_F as Sh_F with no value', 'set w of sh_F to 6',
-                  'set h of sh_F to 7', 'keep a_F as whole number with value 0'],
+        "setup": ['keep sh_F as Sh_F with no value', f'set w of sh_F to {w}',
+                  f'set h of sh_F to {h}', 'keep a_F as whole number with value 0'],
         "work":  ['put w of sh_F times h of sh_F into a_F'],
-        "result": ("a_F", "whole number"), "expect": "42",
+        "result": ("a_F", "whole number"), "expect": str(w * h),
     },
     "attempt": {
         "uses": [],
         "setup": ['keep a_F as whole number with value 0'],
-        "work":  ['attempt', '    put 42 into a_F', 'on success',
+        "work":  ['attempt', f'    put {rv} into a_F', 'on success',
                   '    put a_F into a_F', 'on failure',
                   '    put 0 into a_F', 'end attempt'],
-        "result": ("a_F", "whole number"), "expect": "42",
+        "result": ("a_F", "whole number"), "expect": str(rv),
     },
     "reserved_name": {
         "uses": [],
-        "setup": ['keep out_F as whole number with value 21',
+        "setup": [f'keep {resv}_F as whole number with value {rv}',
                   'keep a_F as whole number with value 0'],
-        "work":  ['put out_F times 2 into a_F'],
-        "result": ("a_F", "whole number"), "expect": "42",
+        "work":  [f'put {resv}_F times 2 into a_F'],
+        "result": ("a_F", "whole number"), "expect": str(rv * 2),
     },
-}
+    }
+
+
+FEATURES = _mk_features(__import__("random").Random(0))   # names only
 
 CONTEXTS = ("program_body", "in_action", "in_module", "in_loop",
             "in_conditional", "nested_two_deep")
+
+# Contexts that can WRAP a base context, composing with it. The ODR bug
+# needed `in_module` AND `multifile` TOGETHER -- a single-context matrix
+# cannot express that. Composing wrappers turns a fixed 60-cell grid into a
+# much larger space, and combined with randomised values it means a re-run
+# is a genuinely different program rather than a replay.
+WRAPPERS = ("none", "loop", "conditional", "loop_in_conditional")
+
+
+def wrap_body(lines, wrapper, depth=1):
+    """Nest the feature's statements inside the chosen control structure.
+    Returns (prefix_lines, wrapped_lines, suffix_lines) at the given indent."""
+    pad = "    " * depth
+    if wrapper == "none":
+        return [], lines, []
+    if wrapper == "loop":
+        return ([f"{pad}keep wn_x as whole number with value 0",
+                 f"{pad}while wn_x is less than 1 repeat"],
+                ["    " + l for l in lines],
+                [f"{pad}    put wn_x plus 1 into wn_x", f"{pad}end while"])
+    if wrapper == "conditional":
+        return ([f"{pad}keep wf_x as whole number with value 1",
+                 f"{pad}if wf_x is equal to 1 then"],
+                ["    " + l for l in lines],
+                [f"{pad}end if"])
+    if wrapper == "loop_in_conditional":
+        return ([f"{pad}keep wf_x as whole number with value 1",
+                 f"{pad}if wf_x is equal to 1 then",
+                 f"{pad}    keep wn_x as whole number with value 0",
+                 f"{pad}    while wn_x is less than 1 repeat"],
+                ["        " + l for l in lines],
+                [f"{pad}        put wn_x plus 1 into wn_x",
+                 f"{pad}    end while", f"{pad}end if"])
+    return [], lines, []
 
 
 def ind(lines, n):
@@ -152,9 +205,9 @@ def ind(lines, n):
     return "".join(f"{pad}{l}\n" for l in lines)
 
 
-def build(feature: str, context: str):
+def build(feature: str, context: str, feats=None, wrapper="none"):
     """Returns (main_src, module_src_or_None, expected)."""
-    f = FEATURES[feature]
+    f = (feats or FEATURES)[feature]
     tag = feature[:4]
     sub = lambda ls: [l.replace("_F", f"_{tag}") for l in ls]
     setup, work = sub(f["setup"]), sub(f["work"])
@@ -164,13 +217,21 @@ def build(feature: str, context: str):
     expected = f"r={f['expect']}"
 
     if context == "program_body":
+        # The print MUST stay inside the wrapped region: the variable is
+        # declared there, and Dictum scopes it to that block. (An earlier
+        # version of this tool declared inside a loop and printed outside,
+        # then reported the resulting scope error as a compiler bug -- it
+        # was the tool's mistake.)
+        pre, body, post = wrap_body(
+            setup + work + [f'print the text "r=" and {rvar}'], wrapper, 1)
         src = (uses + ("\n" + shape_decl + "\n" if shape_decl else "") +
-               "\nprogram main\n\n" + ind(setup, 1) + ind(work, 1) +
-               f'    print the text "r=" and {rvar}\n' + "\nend program\n")
+               "\nprogram main\n\n" + ind(pre, 1) + ind(body, 1) +
+               ind(post, 0) + "\nend program\n")
         return src, None, expected
 
     if context == "in_action":
-        body = ind(setup, 1) + ind(work, 1) + f"    return {rvar}\n"
+        pre, wb, post = wrap_body(setup + work, wrapper, 1)
+        body = ind(pre, 1) + ind(wb, 1) + ind(post, 0) + f"    return {rvar}\n"
         src = (uses + ("\n" + shape_decl + "\n" if shape_decl else "") +
                f"\naction compute_{tag} takes nothing produces {rtype}\n{body}end action\n"
                "\nprogram main\n\n"
@@ -199,13 +260,20 @@ def build(feature: str, context: str):
         return main, mod, expected
 
     if context == "in_loop":
-        # Runs the feature inside a loop body: per-iteration scoping, and
-        # re-declaration hazards that a single execution never reveals.
+        # The feature's WORK runs inside the loop; its DECLARATIONS stay
+        # outside so the result is still in scope afterwards.
+        #
+        # An earlier version put setup inside the loop and printed outside,
+        # producing a genuine scope error -- and then reported the
+        # compiler's correct rejection as a compiler bug. It also would
+        # have run the work twice, invalidating the expected value. Both
+        # were the TOOL's mistakes. The loop runs ONCE so the expected
+        # value stays exact.
         src = (uses + ("\n" + shape_decl + "\n" if shape_decl else "") +
-               "\nprogram main\n\n"
+               "\nprogram main\n\n" + ind(setup, 1) +
                "    keep n_it as whole number with value 0\n"
-               "    while n_it is less than 2 repeat\n"
-               + ind(setup, 2) + ind(work, 2) +
+               "    while n_it is less than 1 repeat\n"
+               + ind(work, 2) +
                "        put n_it plus 1 into n_it\n"
                "    end while\n"
                f'    print the text "r=" and {rvar}\n\nend program\n')
@@ -224,25 +292,27 @@ def build(feature: str, context: str):
         return src, None, expected
 
     if context == "nested_two_deep":
+        # Same discipline: declarations at program scope, WORK nested two
+        # deep (loop inside conditional), print where the value is live.
         src = (uses + ("\n" + shape_decl + "\n" if shape_decl else "") +
-               "\nprogram main\n\n"
+               "\nprogram main\n\n" + ind(setup, 1) +
                "    keep flag_c as whole number with value 1\n"
                "    if flag_c is equal to 1 then\n"
                "        keep n_it as whole number with value 0\n"
-               "        while n_it is less than 2 repeat\n"
-               + ind(setup, 3) + ind(work, 3) +
+               "        while n_it is less than 1 repeat\n"
+               + ind(work, 3) +
                "            put n_it plus 1 into n_it\n"
                "        end while\n"
-               f'        print the text "r=" and {rvar}\n'
-               "    end if\n\nend program\n")
+               "    end if\n"
+               f'    print the text "r=" and {rvar}\n\nend program\n')
         return src, None, expected
 
     raise ValueError(context)
 
 
-def run_cell(feature, context, workdir):
+def run_cell(feature, context, workdir, feats=None, wrapper="none"):
     try:
-        main_src, mod_src, expected = build(feature, context)
+        main_src, mod_src, expected = build(feature, context, feats, wrapper)
     except Exception as e:
         return "skip", f"cannot construct: {e}"
 
@@ -299,30 +369,47 @@ def main() -> int:
     ap.add_argument("--feature")
     ap.add_argument("--context")
     ap.add_argument("--json")
+    ap.add_argument("--seed", type=int,
+                    help="reproduce a specific run; omit for a fresh random one")
+    ap.add_argument("--rounds", type=int, default=1,
+                    help="sweep the matrix N times, each with fresh random "
+                         "values and wrappers")
     args = ap.parse_args()
+    import random as _random
+    rng = _random.Random(args.seed if args.seed is not None else os.urandom(8))
 
     feats = [args.feature] if args.feature else sorted(FEATURES)
     ctxs = [args.context] if args.context else list(CONTEXTS)
 
-    print(f"edges: {len(feats)} features x {len(ctxs)} contexts = "
-          f"{len(feats)*len(ctxs)} cells, each on all 3 backends")
+    cells = len(feats) * len(ctxs) * args.rounds
+    print(f"edges: {len(feats)} features x {len(ctxs)} contexts x "
+          f"{args.rounds} round(s) = {cells} cells, each on all 3 backends")
     print("Bugs live where an ORDINARY feature meets a context it has never")
-    print("been placed in -- that is the axis feature-pairing cannot reach.\n")
-    print(f"{'feature':<15}" + "".join(f"{c[:9]:<11}" for c in ctxs))
+    print("been placed in -- the axis feature-pairing cannot reach.")
+    print("Values AND control-flow wrappers are randomised per round, so a")
+    print("re-run is a different program, not a replay.\n")
 
     findings = []
     root = tempfile.mkdtemp(prefix="edges_")
     try:
-        for f in feats:
-            row = f"{f:<15}"
-            for c in ctxs:
-                verdict, detail = run_cell(f, c, os.path.join(root, f"{f}_{c}"))
-                mark = {"ok": ".", "wrong": "WRONG", "build_fail": "BUILD",
-                        "skip": "-"}[verdict]
-                row += f"{mark:<11}"
-                if verdict in ("wrong", "build_fail"):
-                    findings.append((f, c, verdict, detail))
-            print(row, flush=True)
+        for rnd in range(args.rounds):
+            fr = _mk_features(rng)          # fresh values this round
+            print(f"{'feature':<15}" + "".join(f"{c[:9]:<11}" for c in ctxs)
+                  + (f"   [round {rnd+1}]" if args.rounds > 1 else ""))
+            for f in feats:
+                row = f"{f:<15}"
+                for c in ctxs:
+                    wrapper = rng.choice(WRAPPERS) if c in (
+                        "program_body", "in_action") else "none"
+                    verdict, detail = run_cell(
+                        f, c, os.path.join(root, f"{f}_{c}_{rnd}"), fr, wrapper)
+                    mark = {"ok": ".", "wrong": "WRONG", "build_fail": "BUILD",
+                            "skip": "-"}[verdict]
+                    row += f"{mark:<11}"
+                    if verdict in ("wrong", "build_fail"):
+                        findings.append((f, f"{c}/{wrapper}", verdict, detail))
+                print(row, flush=True)
+            print()
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
