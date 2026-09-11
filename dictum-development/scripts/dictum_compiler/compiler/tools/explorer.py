@@ -429,48 +429,83 @@ def main() -> int:
     frags = build_fragments()
     names = [f.name for f in frags]
     all_pairs = [f"{a}|{b}" for a, b in itertools.combinations(sorted(names), 2)]
+    # TRIPLES: some bugs need three features at once, and a 2-way schedule
+    # reaches those only by luck. Enumerated as a SECOND PHASE -- pairs
+    # first (cheap, catches most interaction bugs), then triples.
+    all_triples = [f"{a}|{b}|{c}"
+                   for a, b, c in itertools.combinations(sorted(names), 3)]
     cov = load_coverage()
+    cov.setdefault("triples", {})
 
     if args.report:
-        done = sum(1 for p in all_pairs if cov["pairs"].get(p))
-        print(f"fragments: {len(frags)}   pairs: {len(all_pairs)}")
-        print(f"covered:   {done} ({100*done//max(1,len(all_pairs))}%)  over {cov['runs']} runs")
-        untried = [p for p in all_pairs if not cov["pairs"].get(p)]
-        print(f"untried:   {len(untried)}")
-        if untried[:5]:
-            print("  next up:", ", ".join(untried[:5]))
+        dp = sum(1 for p in all_pairs if cov["pairs"].get(p))
+        dt = sum(1 for t in all_triples if cov["triples"].get(t))
+        counts = [cov["pairs"].get(p, 0) for p in all_pairs]
+        print(f"fragments: {len(frags)}")
+        print(f"pairs:     {dp}/{len(all_pairs)} ({100*dp//max(1,len(all_pairs))}%) "
+              f"covered, min hits={min(counts) if counts else 0}, "
+              f"max={max(counts) if counts else 0}")
+        print(f"triples:   {dt}/{len(all_triples)} ({100*dt//max(1,len(all_triples))}%)")
+        print(f"runs:      {cov['runs']}   findings: {len(cov.get('findings', []))}")
+        nxt = ([p for p in all_pairs if not cov["pairs"].get(p)] or
+               [t for t in all_triples if not cov["triples"].get(t)])
+        if nxt[:4]:
+            print("  next up:", ", ".join(nxt[:4]))
         return 0
 
     rng = random.Random(args.seed if args.seed is not None else os.urandom(8))
     by_name = {f.name: f for f in frags}
     untried = [p for p in all_pairs if not cov["pairs"].get(p)]
     rng.shuffle(untried)
+    untried_triples = [t for t in all_triples if not cov["triples"].get(t)]
+    rng.shuffle(untried_triples)
 
-    print(f"explorer: {len(frags)} fragments, {len(all_pairs)} pairs, "
-          f"{len(untried)} still untried")
-    print("targeting UNTRIED pairs first, so each run explores new ground\n")
+    print(f"explorer: {len(frags)} fragments | pairs untried: {len(untried)} "
+          f"| triples untried: {len(untried_triples)}")
+    print("schedule: untried pairs -> untried triples -> LEAST-tested pairs.")
+    print("Values are randomised every run, so even a re-tested pair is a")
+    print("different program. A pair is never 'done' -- one passing value")
+    print("combination does not prove the pair correct.\n")
 
     ok = wrong = failed = 0
     workroot = tempfile.mkdtemp(prefix="explorer_")
     try:
         for n in range(args.count):
+            kind = "pair"
             if untried:
                 pair = untried.pop()
-                a, b = pair.split("|")
-                chosen = [by_name[a], by_name[b]]
+                chosen = [by_name[x] for x in pair.split("|")]
+                extra = rng.choice(frags)
+                if extra.name not in {f.name for f in chosen}:
+                    chosen.append(extra)
+            elif untried_triples:
+                # Phase 2: systematic 3-way coverage.
+                kind = "triple"
+                pair = untried_triples.pop()
+                chosen = [by_name[x] for x in pair.split("|")]
             else:
-                chosen = rng.sample(frags, 2)
-                pair = "|".join(sorted(f.name for f in chosen))
-            # layer in one extra random fragment for depth
-            extra = rng.choice(frags)
-            if extra.name not in {f.name for f in chosen}:
-                chosen.append(extra)
+                # Phase 3: revisit the LEAST-tested pairs, not a uniform
+                # reroll. A pair tested once with one set of values is not
+                # proven -- this keeps deepening the thinnest coverage
+                # instead of piling more runs onto already-heavy pairs.
+                pair = min(all_pairs, key=lambda p: (cov["pairs"].get(p, 0), rng.random()))
+                chosen = [by_name[x] for x in pair.split("|")]
+                extra = rng.choice(frags)
+                if extra.name not in {f.name for f in chosen}:
+                    chosen.append(extra)
 
             main_src, module_src, expected = assemble(chosen, rng)
             wd = os.path.join(workroot, f"case{n}")
             verdict, detail = run_case(main_src, module_src, expected, wd, rng)
 
-            cov["pairs"][pair] = cov["pairs"].get(pair, 0) + 1
+            bucket = cov["triples"] if kind == "triple" else cov["pairs"]
+            bucket[pair] = bucket.get(pair, 0) + 1
+            # A triple also exercises its three constituent pairs.
+            if kind == "triple":
+                parts = sorted(pair.split("|"))
+                for a2, b2 in itertools.combinations(parts, 2):
+                    k = f"{a2}|{b2}"
+                    cov["pairs"][k] = cov["pairs"].get(k, 0) + 1
             if verdict == "ok":
                 ok += 1
                 shutil.rmtree(wd, ignore_errors=True)
@@ -495,12 +530,14 @@ def main() -> int:
         shutil.rmtree(workroot, ignore_errors=True)
 
     done = sum(1 for p in all_pairs if cov["pairs"].get(p))
+    dtri = sum(1 for t in all_triples if cov["triples"].get(t))
     print(f"\n=== explorer summary ===")
     print(f"generated:     {args.count}")
     print(f"correct:       {ok}")
     print(f"WRONG OUTPUT:  {wrong}")
     print(f"build failures:{failed}")
     print(f"pair coverage: {done}/{len(all_pairs)} ({100*done//max(1,len(all_pairs))}%)")
+    print(f"triple cover:  {dtri}/{len(all_triples)} ({100*dtri//max(1,len(all_triples))}%)")
     return 1 if (wrong or failed) else 0
 
 
