@@ -170,6 +170,24 @@ class Transpiler:
         else:
             emitter = CEmitter()
 
+        # FILE-LEVEL PRE-SCAN. These flags gate runtime #includes and
+        # forward declarations, and they must be computed over the WHOLE
+        # ast -- a top-level Action is a SIBLING of Program, not inside it.
+        # Only StdlibTranspiler did this; the base Transpiler (used by any
+        # program without a `use` line) did not, so e.g. a `growable list`
+        # declared inside an action produced "unknown type name
+        # 'dictum_glist_t'". Lists worked in `program main` but not in a
+        # helper action.
+        for _flag, _pred in (("_file_has_produce_failure", "_has_produce_failure"),
+                             ("_file_has_attempt_nodes",  "_has_attempt_nodes"),
+                             ("_file_has_growable_list",  "_has_growable_list"),
+                             ("_file_has_gset_or_map",    "_has_gset_or_map")):
+            if hasattr(emitter, _pred):
+                setattr(emitter, _flag,
+                        any(getattr(emitter, _pred)(n) for n in ast))
+        if hasattr(emitter, '_file_top_level_actions'):
+            emitter._file_top_level_actions = [n for n in ast if isinstance(n, Action)]
+
         for node in ast:
             emitter.emit_node(node)
         code = emitter.get_output()
@@ -309,6 +327,17 @@ class StdlibTranspiler(Transpiler):
             emitter._file_has_produce_failure = any(emitter._has_produce_failure(n) for n in ast)
         if hasattr(emitter, '_has_attempt_nodes'):
             emitter._file_has_attempt_nodes = any(emitter._has_attempt_nodes(n) for n in ast)
+        # Same pre-scan, for the runtime-header includes. The gate used to
+        # walk only the Program node -- but a top-level Action is a SIBLING
+        # of Program, not inside it. So a `growable list` (or map/set)
+        # declared inside an ACTION never triggered its #include, and the
+        # generated C failed with "unknown type name 'dictum_glist_t'".
+        # Lists worked in `program main` and not in a helper action, which
+        # is about as ordinary a thing to write as exists.
+        if hasattr(emitter, '_has_growable_list'):
+            emitter._file_has_growable_list = any(emitter._has_growable_list(n) for n in ast)
+        if hasattr(emitter, '_has_gset_or_map'):
+            emitter._file_has_gset_or_map = any(emitter._has_gset_or_map(n) for n in ast)
         # Forward-decl bug fix (found 2026-07): same pre-scan pattern
         # as _file_has_produce_failure/_file_has_attempt_nodes above --
         # lets emit_c.py/emit_cpp.py forward-declare a top-level Action

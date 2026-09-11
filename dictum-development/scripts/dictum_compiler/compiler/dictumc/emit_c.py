@@ -304,6 +304,8 @@ class CEmitter:
         # anything that doesn't set them explicitly keeps prior behavior.
         self._file_has_produce_failure: bool = False
         self._file_has_attempt_nodes: bool = False
+        self._file_has_growable_list: bool = False
+        self._file_has_gset_or_map: bool = False
         self.current_module: Optional[str] = None
         self._module_actions: Dict[str, set] = {}   # FIX: module_name -> {action names declared in it}
         self._active_local_modules: set = set()     # FIX: modules brought into scope via `use <local module>`
@@ -1394,9 +1396,9 @@ class CEmitter:
             if _needs_core:
                 self.emit('#include "dictum_core.h"')
                 self.emit('#include "dictum_error.h"')
-            if self._has_growable_list(node):
+            if self._has_growable_list(node) or self._file_has_growable_list:
                 self.emit('#include "dictum_glist.h"')
-            if self._has_gset_or_map(node):
+            if self._has_gset_or_map(node) or self._file_has_gset_or_map:
                 self.emit('#include "dictum_gset.h"')
                 self.emit('#include "dictum_map.h"')
             if not self._includes_emitted:

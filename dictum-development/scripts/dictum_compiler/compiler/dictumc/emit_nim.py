@@ -407,7 +407,7 @@ class NimEmitter:
                 return f"cast[pointer](addr({self.expr_to_nim(node.operand)}))"
             if node.op in ("count", "length"):
                 operand = self.expr_to_nim(node.operand)
-                return f"len({operand})"
+                return f"int32(len({operand}))"
             op = _UNARY_OP_MAP.get(node.op, node.op)
             if op is None:
                 op = node.op
@@ -420,7 +420,7 @@ class NimEmitter:
             if node.name in ("count", "the count"):
                 if node.args:
                     arg = self.expr_to_nim(node.args[0])
-                    return f"len({arg})"
+                    return f"int32(len({arg}))"
             args = []
             for a in node.args:
                 s = self.expr_to_nim(a)

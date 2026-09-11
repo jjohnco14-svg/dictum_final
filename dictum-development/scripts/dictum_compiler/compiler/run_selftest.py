@@ -5152,6 +5152,54 @@ def test_r90_runtime_header_multi_tu(tmp):
     return True, f"ok -- multi-module tool identical across {sorted(outputs)}"
 
 
+@regression("R91 runtime-header includes must be gated on the WHOLE FILE, "
+            "not just the Program node. A top-level Action is a SIBLING of "
+            "Program, not inside it, so a `growable list` (or map/set) "
+            "declared inside an ACTION never triggered its #include: "
+            "\"unknown type name 'dictum_glist_t'\". Lists worked in "
+            "`program main` and NOT in a helper action -- about as ordinary "
+            "a thing to write as exists. StdlibTranspiler pre-scanned the "
+            "file for attempt/produce-failure; the BASE Transpiler (used by "
+            "any program with no `use` line) did no pre-scan at all. Also "
+            "covers nim's int32(len(...)) cast, since Nim will not "
+            "implicitly narrow int to int32 the way C does")
+def test_r91_runtime_include_gated_on_whole_file(tmp):
+    src = os.path.join(tmp, "inact.dict")
+    open(src, "w").write(
+        'action build_list takes nothing produces whole number\n'
+        '    keep g as growable list of whole number with no value\n'
+        '    add 4 to g\n'
+        '    add 5 to g\n'
+        '    keep a as whole number with value 0\n'
+        '    put the count of g into a\n'
+        '    return a\n'
+        'end action\n\n'
+        'program main\n'
+        '    keep out_v as whole number with value 0\n'
+        '    call build_list giving out_v\n'
+        '    print the text "r=" and out_v\n'
+        'end program\n'
+    )
+    for backend in ("c", "cpp", "nim"):
+        if backend == "nim" and shutil.which("nim") is None:
+            continue
+        out_bin = os.path.join(tmp, f"il_{backend}")
+        r = subprocess.run(
+            [sys.executable, CLI, src, "--backend", backend, "--compile",
+             "--output", out_bin],
+            capture_output=True, text=True, timeout=200, cwd=HERE)
+        if r.returncode != 0:
+            combined = r.stdout + r.stderr
+            hint = (" -- the glist runtime header is not being included for a "
+                    "list declared inside an ACTION"
+                    if "dictum_glist_t" in combined else "")
+            return False, f"[{backend}] build failed{hint}: {combined[-300:]}"
+        run = _run(out_bin, timeout=20)
+        if "r=2" not in run.stdout:
+            return False, f"[{backend}] unexpected output: {run.stdout!r}"
+    return True, "ok -- collections work inside actions on all backends"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 
