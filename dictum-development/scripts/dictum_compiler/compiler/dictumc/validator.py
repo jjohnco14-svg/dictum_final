@@ -1075,6 +1075,25 @@ class Validator:
                     shape = self.shapes[self.current_class]
                     if node.name in shape.fields:
                         return shape.fields[node.name]
+                # An ACTION NAME used as a value -- passing a callback:
+                # `call apply with twice and 21 giving r`. The language
+                # reference already documents the function-TYPE annotation
+                # (`action taking A as T1 produces T2`) and the parser
+                # accepts it, but an action name in value position resolved
+                # only against variables, so higher-order calls failed with
+                # "Use of undeclared variable 'twice'" -- the type existed
+                # with no way to produce a value of it.
+                if node.name in self.actions:
+                    sig = self.actions[node.name]
+                    params = getattr(sig, "params", None) or []
+                    ptypes = []
+                    for pr in params:
+                        ptypes.append(pr[1] if isinstance(pr, (tuple, list)) and len(pr) > 1
+                                      else str(pr))
+                    ret = getattr(sig, "return_type", None) or "nothing"
+                    inner = " and ".join(f"A{i} as {t}" for i, t in enumerate(ptypes))
+                    return (f"action taking {inner} produces {ret}" if ptypes
+                            else f"action produces {ret}")
                 self.error(f"Use of undeclared variable '{node.name}'", node.line)
                 return None
             if not info.initialized:

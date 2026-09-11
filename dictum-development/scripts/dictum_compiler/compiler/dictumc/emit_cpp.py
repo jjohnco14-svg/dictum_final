@@ -550,8 +550,27 @@ class CppEmitter:
             return f"{self.type_to_cpp(t[len('ref '):].strip())}&"
         if t.startswith('move '):
             return f"{self.type_to_cpp(t[len('move '):].strip())}&&"
-        if t.startswith('action taking '):
-            return "std::function<bool(int32_t)>"
+        if t.startswith('action taking ') or t.startswith('action produces '):
+            # This used to return a HARDCODED std::function<bool(int32_t)>
+            # for every action type, ignoring the real signature. It
+            # compiled cleanly and silently produced WRONG ANSWERS: an
+            # action returning `whole number` was typed as returning bool,
+            # so `apply(twice, 21)` printed 1 instead of 42. Parse the
+            # actual signature instead.
+            import re as _re
+            _ret = "void"
+            _m = _re.search(r"\bproduces\s+(.+)$", t.strip())
+            if _m:
+                _r = _m.group(1).strip()
+                _ret = "void" if _r == "nothing" else self.type_to_cpp(_r)
+            _ps = []
+            _m2 = _re.search(r"\btaking\s+(.+?)\s+produces\b", t.strip())
+            if _m2:
+                for _part in _m2.group(1).split(" and "):
+                    _part = _part.strip()
+                    _pm = _re.match(r"\w+\s+as\s+(.+)$", _part)
+                    _ps.append(self.type_to_cpp(_pm.group(1).strip() if _pm else _part))
+            return f"std::function<{_ret}({', '.join(_ps)})>"
         if t.startswith('*'):
             rest = t[1:].strip()
             if rest.startswith('volatile'):

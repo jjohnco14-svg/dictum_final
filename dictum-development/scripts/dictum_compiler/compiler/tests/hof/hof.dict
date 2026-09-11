@@ -1,0 +1,17 @@
+action twice takes n as whole number produces whole number
+    keep r as whole number with value 0
+    put n times 2 into r
+    return r
+end action
+
+action apply takes f as action taking A as whole number produces whole number and v as whole number produces whole number
+    keep r as whole number with value 0
+    call f with v giving r
+    return r
+end action
+
+program p
+    keep out1 as whole number with value 0
+    call apply with twice and 21 giving out1
+    print the text "r=" and out1
+end program

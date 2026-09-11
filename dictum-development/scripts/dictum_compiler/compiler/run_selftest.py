@@ -4839,6 +4839,47 @@ def test_r84_stdlib_all_backends(tmp):
     return True, f"ok -- Text/File/Math identical across {sorted(outputs)}, no flags"
 
 
+@regression("R85 higher-order actions: passing an action as a value. The "
+            "function-TYPE annotation (`action taking A as T1 produces T2`) "
+            "was already documented AND parsed, but an action name in value "
+            "position resolved only against variables -- so the type existed "
+            "with no way to produce a value of it. Three backend bugs behind "
+            "it: emit_c rendered the type as a mangled identifier (not a C "
+            "type); emit_cpp returned a HARDCODED std::function<bool(int32_t)> "
+            "for every signature, which compiled cleanly and silently "
+            "returned WRONG ANSWERS (42 became 1); emit_nim had no case at "
+            "all and emitted the raw Dictum text as a Nim type")
+def test_r85_higher_order_actions(tmp):
+    src_dir = os.path.join(HERE, "tests", "hof")
+    if not os.path.isdir(src_dir):
+        return None, "SKIP: tests/hof fixtures not present"
+    src_tpl = open(os.path.join(src_dir, "hof.dict")).read()
+
+    outputs = {}
+    for backend in ("c", "cpp", "nim"):
+        if backend == "nim" and shutil.which("nim") is None:
+            continue
+        src = os.path.join(tmp, f"hof_{backend}.dict")
+        open(src, "w").write(src_tpl)
+        out_bin = os.path.join(tmp, f"hof_{backend}")
+        r = subprocess.run(
+            [sys.executable, CLI, src, "--backend", backend, "--compile",
+             "--output", out_bin],
+            capture_output=True, text=True, timeout=180, cwd=HERE)
+        if r.returncode != 0:
+            return False, (f"[{backend}] higher-order build failed: "
+                            f"{(r.stdout + r.stderr)[-400:]}")
+        run = _run(out_bin, timeout=20)
+        got = "".join(run.stdout.split())
+        # 21 doubled = 42. A wrong RESULT here (notably 1) means a backend
+        # is mistyping the callback rather than failing outright.
+        if got != "r=42":
+            return False, (f"[{backend}] expected 'r=42', got {got!r} -- the "
+                            f"callback's signature is being mistyped")
+        outputs[backend] = got
+    return True, f"ok -- callbacks work and agree across {sorted(outputs)}"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

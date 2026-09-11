@@ -165,8 +165,36 @@ class NimEmitter:
     def emit(self, line: str = "") -> None:
         self.output.append("    " * self.indent + line)
 
+    def _fn_type_to_nim(self, t: str):
+        """`action taking A as T1 produces T2` -> Nim `proc (a0: T1): T2`.
+        emit_nim had no case for action types at all, so the raw Dictum
+        text was emitted verbatim as a Nim type name and the compiler
+        rejected it."""
+        import re as _re
+        body = t.strip()
+        if not body.startswith("action"):
+            return None
+        ret = ""
+        m = _re.search(r"\bproduces\s+(.+)$", body)
+        if m:
+            r = m.group(1).strip()
+            if r != "nothing":
+                ret = ": " + self.type_to_nim(r)
+        params = []
+        m2 = _re.search(r"\btaking\s+(.+?)\s+produces\b", body)
+        if m2:
+            for i, part in enumerate(m2.group(1).split(" and ")):
+                part = part.strip()
+                pm = _re.match(r"\w+\s+as\s+(.+)$", part)
+                params.append(f"a{i}: {self.type_to_nim(pm.group(1).strip() if pm else part)}")
+        return f"proc ({', '.join(params)}){ret}"
+
     def type_to_nim(self, dt: str) -> str:
         dt = dt.strip()
+        if dt.startswith("action taking ") or dt.startswith("action produces "):
+            fn = self._fn_type_to_nim(dt)
+            if fn:
+                return fn
         if dt.startswith("list of "):
             inner = self.type_to_nim(dt[8:])
             return f"seq[{inner}]"

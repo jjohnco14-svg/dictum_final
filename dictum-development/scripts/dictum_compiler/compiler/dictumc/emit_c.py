@@ -827,6 +827,10 @@ class CEmitter:
         # `growable list of <inner>` (gap #9) -- checked before the fixed
         # `list of` stripping below since it's a distinct runtime type,
         # not a C array.
+        if t.startswith('action taking ') or t.startswith('action produces '):
+            fn = self._fn_type_to_c(t)
+            if fn:
+                return fn
         if t.startswith('growable list of '):
             elem = t[len('growable list of '):].strip()
             # Typed variants (gap #9, second pass). Previously ONLY
@@ -890,6 +894,42 @@ class CEmitter:
     # ------------------------------------------------------------------
     # BUG-04 FIX: resolve Module.function names
     # ------------------------------------------------------------------
+
+
+    def _fn_type_to_c(self, t: str):
+        """`action taking A as T1 and B as T2 produces T3` -> a real C
+        function-pointer type, via a generated typedef.
+
+        C's function-pointer syntax puts the variable name INSIDE the type
+        (`int32_t (*f)(int32_t)`), which does not fit a "render the type,
+        then the name" emitter. A typedef sidesteps that cleanly and keeps
+        the generated code readable. Without this the type rendered as a
+        mangled identifier -- `action_taking_A_as_whole_number_produces_...`
+        -- which is not a C type at all, so higher-order actions transpiled
+        and then failed to compile."""
+        import re as _re
+        body = t.strip()
+        if not body.startswith("action"):
+            return None
+        ret = "void"
+        m = _re.search(r"\bproduces\s+(.+)$", body)
+        if m:
+            r = m.group(1).strip()
+            ret = "void" if r == "nothing" else self.type_to_c(r)
+        params = []
+        m2 = _re.search(r"\btaking\s+(.+?)\s+produces\b", body)
+        if m2:
+            for part in m2.group(1).split(" and "):
+                part = part.strip()
+                pm = _re.match(r"\w+\s+as\s+(.+)$", part)
+                params.append(self.type_to_c(pm.group(1).strip() if pm else part))
+        sig = f"{ret}(*)({', '.join(params) if params else 'void'})"
+        name = "dictum_fn_" + _re.sub(r"[^0-9A-Za-z]+", "_", sig).strip("_").lower()
+        if not hasattr(self, "_fn_typedefs"):
+            self._fn_typedefs = {}
+        self._fn_typedefs[name] = (
+            f"typedef {ret} (*{name})({', '.join(params) if params else 'void'});")
+        return name
 
     def _glist_api(self, c_type: str):
         """dictum_glist_t -> 'dictum_glist', dictum_glist_text_t ->
@@ -2409,6 +2449,23 @@ class CEmitter:
 
     # ------------------------------------------------------------------
     def get_output(self) -> str:
+        # Emit any function-pointer typedefs generated for higher-order
+        # action parameters. Collected during emission (the type is only
+        # discovered when a parameter using it is rendered), so they are
+        # spliced in after the include block here.
+        if getattr(self, "_fn_typedefs", None):
+            at = 0
+            for i, line in enumerate(self.output):
+                st = line.strip()
+                if st.startswith("#include") or st.startswith("#define") \
+                        or st.startswith("typedef const char*") or not st:
+                    at = i + 1
+                elif st.startswith("#") or st.startswith("/*") or st.startswith("*"):
+                    at = i + 1
+                else:
+                    break   # first real code line -- typedefs go above it
+            for off, td in enumerate(sorted(set(self._fn_typedefs.values()))):
+                self.output.insert(at + off, td)
         # Flush any residual action buffer (module-only files)
         if not self._includes_emitted and (self._struct_buffer or self._action_buffer):
             prelude = [
