@@ -689,8 +689,19 @@ class CppEmitter:
         elif isinstance(node, UnaryOp):
             op = node.op; operand = self.expr_to_cpp(node.operand)
             if op == "addressof":
-                # `the address of X` -> &X. See emit_c.py for why this
-                # matters: C out-parameter APIs were blessed yet uncallable.
+                # `the address of X` -> &X, EXCEPT for container types.
+                # A `list of T` is a real C array on the C backend (so &arr
+                # is the buffer) but a std::vector here -- and &vec is the
+                # address of the VECTOR OBJECT, i.e. its internal pointers,
+                # not its data. Passing that to a C out-parameter function
+                # overwrites the vector's internals and segfaults. Taking
+                # .data() keeps `the address of` meaning the same thing on
+                # every backend, which is the whole point of the operator.
+                if isinstance(node.operand, Identifier):
+                    _vt = self.declared_vars.get(node.operand.name, "")
+                    if self._is_vector_type(_vt) if hasattr(self, "_is_vector_type") \
+                            else _vt.startswith("std::vector"):
+                        return f"(void*){operand}.data()"
                 return f"(void*)&{operand}"
             if op == "count":
                 if isinstance(node.operand, Identifier):
@@ -743,6 +754,20 @@ class CppEmitter:
                            ['unique handle to ', 'shared handle to ', 'weak handle to ']):
                         arg_str = f"(*{arg_str})"
                 processed.append(arg_str)
+            # FFI call-site coercion. `the address of X` yields an
+            # `opaque pointer` (void*), but an imported C function may
+            # declare that parameter as `text` (const char*) to match the
+            # real libc signature. C performs that conversion implicitly;
+            # C++ does NOT ("invalid conversion from 'void*' to
+            # 'const char*'"). Cast to the DECLARED parameter type so ONE
+            # `import from C` line works on every backend, instead of
+            # needing a different declaration per backend.
+            _sig = self.imported_actions.get(node.name)
+            if _sig:
+                for _i, _pt in enumerate(_sig[0] or []):
+                    if _i < len(processed):
+                        _ct = self.type_to_cpp(str(_pt).strip())
+                        processed[_i] = f"({_ct})({processed[_i]})"
             args = ", ".join(processed)
             if c_name in ('success', '__produce_success'):
                 return args
@@ -1395,6 +1420,13 @@ class CppEmitter:
                 call_args = ", ".join(arg_names)
                 self.emit(f"static inline {ret_cpp} {node.alias}({wrapper_params}) "
                           f"{{ return {node.action_name}({call_args}); }}")
+            # Record the signature for CALL-SITE coercion. This was only
+            # ever populated for ImportCpp, never ImportC -- so an
+            # `import from C` binding had no declared parameter types
+            # available where the call is emitted, and a void* argument
+            # could not be cast to the declared type.
+            self.imported_actions[node.alias or node.action_name] = (
+                node.params, node.ret_type)
             return
 
         if isinstance(node, ImportCpp):

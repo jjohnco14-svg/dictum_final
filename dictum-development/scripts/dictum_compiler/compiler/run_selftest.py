@@ -3206,7 +3206,10 @@ def test_r48_call_giving_return_type_inference(tmp):
     if not os.path.exists(main_c):
         return False, f"expected main.c to be written; result={result}"
     src = open(main_c).read()
-    if "double result = Halve(7.0);" not in src:
+    # Accept an explicit cast on the argument: FFI call sites now coerce
+    # arguments to the DECLARED parameter type so one `import from C` line
+    # works on every backend. `Halve((double)(7.0))` is the same call.
+    if not re.search(r"double result = Halve\((\(double\))?\(?7\.0\)?\);", src):
         return False, (f"expected 'result' to be inferred as 'double' (the real return "
                         f"type of a 'fractional number'-returning import), got:\n{src}")
 
@@ -3226,7 +3229,10 @@ def test_r48_call_giving_return_type_inference(tmp):
     if not os.path.exists(main_c):
         return False, f"expected main.c to be written; result={result}"
     src = open(main_c).read()
-    if "double result = Halve(7.0);" not in src:
+    # Accept an explicit cast on the argument: FFI call sites now coerce
+    # arguments to the DECLARED parameter type so one `import from C` line
+    # works on every backend. `Halve((double)(7.0))` is the same call.
+    if not re.search(r"double result = Halve\((\(double\))?\(?7\.0\)?\);", src):
         return False, (f"expected 'result' to be inferred as 'double' across the file "
                         f"boundary too (mathlib.dict declares Halve, main.dict calls it), "
                         f"got:\n{src}")
@@ -3270,7 +3276,10 @@ def test_r48_call_giving_return_type_inference(tmp):
     if not os.path.exists(main_cpp):
         return False, f"expected main.cpp to be written; result={result}"
     src = open(main_cpp).read()
-    if "double result = Halve(7.0);" not in src:
+    # Accept an explicit cast on the argument: FFI call sites now coerce
+    # arguments to the DECLARED parameter type so one `import from C` line
+    # works on every backend. `Halve((double)(7.0))` is the same call.
+    if not re.search(r"double result = Halve\((\(double\))?\(?7\.0\)?\);", src):
         return False, (f"expected the C++ backend to also infer 'double' for 'result' "
                         f"(this backend had NO action_return_types registry at all before "
                         f"this fix), got:\n{src}")
@@ -4922,6 +4931,57 @@ def test_r85_higher_order_actions(tmp):
                             f"callback's signature is being mistyped")
         outputs[backend] = got
     return True, f"ok -- callbacks work and agree across {sorted(outputs)}"
+
+
+@regression("R86 an UNBLESSED library via raw `import from C`: libuuid, with "
+            "no manifest and no blessing, writing into a caller-allocated "
+            "buffer via `the address of` and printing it through libc puts. "
+            "Guards three real bugs found writing it: (1) `the address of` on "
+            "a container yielded the address of the std::vector/seq OBJECT "
+            "rather than its data -- a real segfault, since C gets a true "
+            "array and the other two do not; (2) FFI call sites did not "
+            "coerce arguments to the DECLARED parameter type, so one "
+            "`import from C` line could not satisfy all three backends; "
+            "(3) the nim coercion used cast[cstring] on a Nim string, which "
+            "reinterprets the string OBJECT's pointer instead of its data -- "
+            "that silently corrupted every SQL string in the real sqlite3 app "
+            "while it still reported success")
+def test_r86_unblessed_library_ffi(tmp):
+    src_dir = os.path.join(HERE, "tests", "unblessed")
+    if not os.path.isdir(src_dir):
+        return None, "SKIP: tests/unblessed fixtures not present"
+    if not os.path.exists("/usr/include/uuid/uuid.h"):
+        return None, "SKIP: uuid-dev not available"
+    src_tpl = open(os.path.join(src_dir, "uuidgen.dict")).read()
+
+    seen = {}
+    for backend in ("c", "cpp", "nim"):
+        if backend == "nim" and shutil.which("nim") is None:
+            continue
+        src = os.path.join(tmp, f"u_{backend}.dict")
+        open(src, "w").write(src_tpl)
+        out_bin = os.path.join(tmp, f"u_{backend}")
+        r = subprocess.run(
+            [sys.executable, CLI, src, "--backend", backend, "--compile",
+             "--output", out_bin, "--link", "uuid"],
+            capture_output=True, text=True, timeout=180, cwd=HERE)
+        if r.returncode != 0:
+            return False, f"[{backend}] build failed: {(r.stdout + r.stderr)[-400:]}"
+        run = _run(out_bin, timeout=20)
+        if run.returncode != 0:
+            return False, (f"[{backend}] crashed (exit {run.returncode}) -- likely "
+                            f"`the address of` is yielding the container object "
+                            f"rather than its data buffer")
+        # A real UUID, not garbage: 8-4-4-4-12 hex.
+        m = re.search(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+                      r"[0-9a-f]{4}-[0-9a-f]{12}\b", run.stdout)
+        if not m:
+            return False, (f"[{backend}] no valid UUID in output {run.stdout!r} -- "
+                            f"the buffer was not filled correctly")
+        seen[backend] = m.group(0)
+    if len(set(seen.values())) != len(seen):
+        return False, f"UUIDs should differ per run/backend, got {seen}"
+    return True, f"ok -- unblessed libuuid works on {sorted(seen)}"
 
 
 if __name__ == "__main__":

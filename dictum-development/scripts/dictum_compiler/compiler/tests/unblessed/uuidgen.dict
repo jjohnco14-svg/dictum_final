@@ -1,0 +1,17 @@
+import from C the action uuid_generate takes opaque pointer produces nothing as uuid_generate
+import from C the action uuid_unparse takes opaque pointer and opaque pointer produces nothing as uuid_unparse
+import from C the action puts takes text produces whole number as c_puts
+
+program uuidgen
+
+    keep raw as list of byte with values 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    keep out as list of byte with values 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+
+    call uuid_generate with the address of raw
+    call uuid_unparse with the address of raw and the address of out
+
+    keep rc as whole number with value 0
+    call c_puts with the address of out giving rc
+    print the text "printed"
+
+end program

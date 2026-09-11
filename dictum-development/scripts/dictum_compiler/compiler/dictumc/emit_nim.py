@@ -157,6 +157,7 @@ class NimEmitter:
         self._imports: Set[str] = set()
         self._needs_strformat = False
         self._stdlib_used = {}
+        self._ffi_sigs = {}
         # Names of `import from C`/`import from C++` functions whose
         # real Dictum return type is `text` -- see R-NIM-11 below for
         # why this has to be tracked at all.
@@ -370,7 +371,19 @@ class NimEmitter:
             if node.op == "addressof":
                 # Nim's `addr` requires a mutable location, which is exactly
                 # what an out-parameter needs; cast to pointer for FFI.
-                return f"cast[pointer](addr({self.expr_to_nim(node.operand)}))"
+                # For a container, `addr(s)` is the address of the SEQ OBJECT
+                # (its internal pointers), not its data -- passing that to a
+                # C out-parameter function corrupts the seq and crashes. Take
+                # the first element's address so `the address of` means the
+                # same thing on every backend (C gets a real array, C++ needs
+                # .data(), Nim needs addr(x[0])).
+                _t = ""
+                if isinstance(node.operand, Identifier):
+                    _t = self.declared_vars.get(node.operand.name, "") or ""
+                _o = self.expr_to_nim(node.operand)
+                if _t.startswith("seq["):
+                    return f"cast[pointer](addr({_o}[0]))"
+                return f"cast[pointer](addr({_o}))"
             if node.op in ("count", "length"):
                 operand = self.expr_to_nim(node.operand)
                 return f"len({operand})"
@@ -397,6 +410,28 @@ class NimEmitter:
             # identifier: 'Text'" -- the single gap that made nim a
             # second-class backend. Map onto Nim's own stdlib instead, and
             # record the proc so only the ones actually used get emitted.
+            _sig = self._ffi_sigs.get(node.name)
+            if _sig:
+                for _i, _pt in enumerate(_sig):
+                    if _i < len(args):
+                        _nt = self.type_to_nim_ffi(str(_pt).strip())
+                        if not _nt or _nt == "pointer":
+                            continue
+                        # cstring needs CONVERSION, not a cast: `cast[cstring](s)`
+                        # reinterprets the Nim string OBJECT's pointer rather than
+                        # its character data, so the callee reads garbage. (This
+                        # silently broke the real sqlite3 app -- every INSERT ran
+                        # with a corrupt SQL string, so the table stayed empty and
+                        # the program still reported success.) Only apply the
+                        # conversion when the argument is not already that type.
+                        if _nt == "cstring":
+                            _a = args[_i]
+                            if not _a.startswith("cast[pointer]"):
+                                args[_i] = f"cstring({_a})"
+                            else:
+                                args[_i] = f"cast[cstring]({_a})"
+                        else:
+                            args[_i] = f"cast[{_nt}]({args[_i]})"
             if "." in node.name:
                 from .nim_stdlib import resolve as _nim_std_resolve
                 hit = _nim_std_resolve(node.name)
@@ -720,6 +755,11 @@ class NimEmitter:
             return
 
         if isinstance(node, ImportC):
+            # Record declared FFI parameter types for CALL-SITE coercion
+            # below: `the address of X` yields a `pointer`, but the binding
+            # may declare `text` (cstring) to match the real C signature.
+            # Nim will not implicitly convert, so the call site must cast.
+            self._ffi_sigs[node.alias or node.action_name] = list(node.params or [])
             nim_params = []
             if node.params:
                 # Each entry in node.params is a TYPE, not "<type> <name>".
