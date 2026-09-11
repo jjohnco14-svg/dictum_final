@@ -1,0 +1,47 @@
+module textstat
+
+    use Text
+
+    action char_count takes body as text produces whole number
+        keep n as whole number with value 0
+        call Text.length with body giving n
+        return n
+    end action
+
+    action count_occurrences takes body as text and needle as text produces whole number
+        keep found as whole number with value 0
+        keep pos as whole number with value 0
+        keep limit as whole number with value 0
+        call Text.length with body giving limit
+
+        while pos is less than limit repeat
+            keep rest as text with value ""
+            call Text.slice with body and pos and limit giving rest
+            keep hit as truth value with value 0
+            call Text.contains with rest and needle giving hit
+            if hit is equal to 1 then
+                keep at as whole number with value 0
+                call Text.find with rest and needle giving at
+                put pos plus at into pos
+                put pos plus 1 into pos
+                put found plus 1 into found
+            otherwise
+                put limit into pos
+            end if
+        end while
+        return found
+    end action
+
+    action describe takes body as text produces text
+        keep label as text with value ""
+        keep n as whole number with value 0
+        call Text.length with body giving n
+        if n is greater than 40 then
+            put "long" into label
+        otherwise
+            put "short" into label
+        end if
+        return label
+    end action
+
+end module

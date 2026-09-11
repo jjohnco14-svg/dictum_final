@@ -21,6 +21,20 @@
  * captured notebook cell's output -- so without an explicit flush, prints
  * can sit invisible in the buffer for a long time even though they already
  * executed correctly. */
+/* MUST tolerate being included by several translation units. A plain
+ * (non-static) definition in a HEADER violates C's one-definition rule:
+ * every .c that includes this header emits its own copy and the link fails
+ * with "multiple definition of 'dictum_flush_stdout'". That is invisible in
+ * a single-file build and breaks EVERY multi-file project -- found by
+ * writing a real 2-module program.
+ *
+ * It cannot simply be `static inline`, because `import from C` binds it by
+ * name and needs external linkage. `weak` gives both: external linkage, and
+ * duplicate definitions across translation units collapse to one instead of
+ * colliding. */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((weak))
+#endif
 int32_t dictum_flush_stdout(void) {
     fflush(stdout);
     return 0;

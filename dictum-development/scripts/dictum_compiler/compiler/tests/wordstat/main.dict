@@ -1,0 +1,36 @@
+use Text
+use File
+
+program main
+
+    use textstat
+
+    keep path as text with value "sample.txt"
+    keep body as text with value ""
+    call File.read with path giving body
+
+    keep chars as whole number with value 0
+    call textstat.char_count with body giving chars
+    print the text "chars=" and chars
+
+    keep spaces as whole number with value 0
+    call textstat.count_occurrences with body and " " giving spaces
+    keep words as whole number with value 0
+    put spaces plus 1 into words
+    print the text "words=" and words
+
+    keep lines as whole number with value 0
+    call textstat.count_occurrences with body and "\n" giving lines
+    print the text "lines=" and lines
+
+    keep size as text with value ""
+    call textstat.describe with body giving size
+    print the text "size=" and size
+
+    keep upper as text with value ""
+    call Text.to_upper with body giving upper
+    keep shout as text with value ""
+    call Text.slice with upper and 0 and 11 giving shout
+    print the text "head=" and shout
+
+end program

@@ -5097,6 +5097,61 @@ def test_r89_attempt_predeclared_result(tmp):
     return True, "ok -- attempt with a pre-declared result works on all backends"
 
 
+@regression("R90 runtime headers must tolerate inclusion by MULTIPLE "
+            "translation units. dictum_flush_stdout was a plain "
+            "(non-static) DEFINITION in dictum_core.h, so every .c that "
+            "included it emitted its own copy: 'multiple definition of "
+            "dictum_flush_stdout' at link time. Invisible in a single-file "
+            "build, broke EVERY multi-file project -- found by writing a "
+            "real 2-module text-analysis tool. It cannot be `static inline` "
+            "either, because `import from C` binds it by name and needs "
+            "external linkage; `weak` gives both")
+def test_r90_runtime_header_multi_tu(tmp):
+    src_dir = os.path.join(HERE, "tests", "wordstat")
+    if not os.path.isdir(src_dir):
+        return None, "SKIP: tests/wordstat fixtures not present"
+    work = os.path.join(tmp, "wordstat")
+    shutil.copytree(src_dir, work)
+
+    outputs = {}
+    for backend in ("c", "cpp", "nim"):
+        if backend == "nim" and shutil.which("nim") is None:
+            continue
+        mani = os.path.join(work, "dictum.project.json")
+        if os.path.exists(mani):
+            os.remove(mani)
+        out_dir = os.path.join(work, f"build_{backend}")
+        r = subprocess.run(
+            [sys.executable, PROJECT_BUILDER, work, "--backend", backend, "--out", out_dir],
+            capture_output=True, text=True, timeout=200, cwd=HERE)
+        if r.returncode != 0:
+            return False, f"[{backend}] build failed: {r.stdout}\n{r.stderr}"
+        shutil.copyfile(os.path.join(work, "sample.txt"),
+                        os.path.join(out_dir, "sample.txt"))
+        if backend == "nim":
+            rb = subprocess.run(["sh", os.path.join(out_dir, "build.sh")],
+                                 capture_output=True, text=True, timeout=420, cwd=out_dir)
+        else:
+            rb = subprocess.run(["make"], capture_output=True, text=True,
+                                 timeout=200, cwd=out_dir)
+        if rb.returncode != 0:
+            combined = rb.stdout + rb.stderr
+            hint = (" -- a runtime header is defining a symbol per translation "
+                    "unit again" if "multiple definition" in combined else "")
+            return False, f"[{backend}] link/compile failed{hint}: {combined[-400:]}"
+        run = _run(os.path.join(out_dir, "main"), timeout=25, cwd=out_dir)
+        outputs[backend] = "".join(run.stdout.split())
+
+    # Counts independently verifiable against `wc` on sample.txt.
+    for expect in ("chars=50", "words=10", "lines=1"):
+        for b, o in outputs.items():
+            if expect not in o:
+                return False, f"[{b}] missing {expect!r} in {o!r}"
+    if len(set(outputs.values())) > 1:
+        return False, f"backends DISAGREE: {outputs}"
+    return True, f"ok -- multi-module tool identical across {sorted(outputs)}"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 
