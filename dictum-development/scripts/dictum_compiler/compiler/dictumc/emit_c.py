@@ -2409,14 +2409,30 @@ class CEmitter:
             if isinstance(p.value, str):   return "%s"
             return "%d"
         if isinstance(p, Identifier):
-            t = self.declared_vars.get(p.name, '')
+            t = (self.declared_vars.get(p.name, '') or '').strip()
             if t in ('double', 'float'):   return "%f"
             if t in ('dictum_text', 'const char*', 'char*'): return "%s"
             if t == 'bool':                return "%d"
             if t == 'size_t':              return "%zu"
             if t in ('int64_t', 'uint64_t'): return "%lld"
-            # heuristic from variable name
+            # A KNOWN integer type must never fall through to the name
+            # heuristic below. It used to: `int32_t` was not listed here, so
+            # any int variable whose NAME happened to contain 'dist'/'price'
+            # /'rate'/'frac' was printed with %f -- undefined behaviour that
+            # prints 0.000000. `keep price as whole number with value 100`
+            # printed "price=0.000000". Found by tools/explorer.py pairing
+            # the reserved-identifier fragment with a loop; the trigger was
+            # a variable called `distinct_2` matching the 'dist' substring.
+            if t in ('int32_t', 'int', 'int8_t', 'int16_t', 'uint8_t',
+                     'uint16_t', 'uint32_t', 'unsigned', 'long'):
+                return "%d"
+            # Name heuristic ONLY for genuinely unknown types -- it is a
+            # guess of last resort, not an override of a declared type.
             n = p.name.lower()
+            if t:
+                # Declared but unrecognised: pointers/structs print as %d
+                # today; guessing from the name here would be worse.
+                return "%d"
             if any(h in n for h in ('frac', 'dist', 'price', 'rate', 'double', 'float')): return "%f"
             if any(h in n for h in ('name', 'msg', 'text', 'str')):  return "%s"
             return "%d"

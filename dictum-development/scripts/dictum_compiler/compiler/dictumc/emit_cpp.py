@@ -1638,6 +1638,16 @@ class CppEmitter:
             if 'double' in t or 'float' in t: return "%f"
             if 'char' in t:                   return "%s"
             if 'size_t' in t:                 return "%zu"
+            # A KNOWN type must never fall through to the name heuristic
+            # below. It used to: an int32_t variable whose NAME contained
+            # 'dist'/'price'/'rate'/'frac' printed with %f -- undefined
+            # behaviour that prints 0.000000. `keep price as whole number
+            # with value 100` printed "price=0.000000". Same bug existed
+            # independently in emit_c.py: these two are hand-written twins,
+            # which is exactly the drift tools/backend_parity.py exists to
+            # surface. Found by tools/explorer.py.
+            if t:
+                return "%d"
             n = p.name.lower()
             if any(h in n for h in ('frac','dist','price','rate','double','float')): return "%f"
             if any(h in n for h in ('name','msg','text','str')): return "%s"

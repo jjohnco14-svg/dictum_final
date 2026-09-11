@@ -5012,6 +5012,49 @@ def test_r87_backend_parity(tmp):
     return True, "ok -- no unexplained divergence between the three emitters"
 
 
+@regression("R88 printf format spec must follow the DECLARED TYPE, never a "
+            "guess from the variable NAME. Both emit_c and emit_cpp fell "
+            "through to a name heuristic ('frac'/'dist'/'price'/'rate' -> "
+            "%f) whenever the declared type was not in their short "
+            "recognised list -- and int32_t was not in it. So `keep price "
+            "as whole number with value 100` printed 'price=0.000000': "
+            "undefined behaviour from passing an int to %f. `price`, "
+            "`rate`, `distance` are about as ordinary as variable names "
+            "get. Found by tools/explorer.py pairing its reserved-identifier "
+            "fragment with a loop -- the trigger was a generated variable "
+            "called `distinct_2` matching the 'dist' substring")
+def test_r88_format_spec_follows_declared_type(tmp):
+    src = os.path.join(tmp, "names.dict")
+    open(src, "w").write(
+        'program p\n'
+        '    keep price as whole number with value 100\n'
+        '    keep rate as whole number with value 7\n'
+        '    keep distance as whole number with value 42\n'
+        '    keep fraction as whole number with value 3\n'
+        '    print the text "price=" and price and ",rate=" and rate and '
+        '",distance=" and distance and ",fraction=" and fraction\n'
+        'end program\n'
+    )
+    want = "price=100,rate=7,distance=42,fraction=3"
+    for backend in ("c", "cpp", "nim"):
+        if backend == "nim" and shutil.which("nim") is None:
+            continue
+        out_bin = os.path.join(tmp, f"n_{backend}")
+        r = subprocess.run(
+            [sys.executable, CLI, src, "--backend", backend, "--compile",
+             "--output", out_bin],
+            capture_output=True, text=True, timeout=180, cwd=HERE)
+        if r.returncode != 0:
+            return False, f"[{backend}] build failed: {(r.stdout + r.stderr)[-300:]}"
+        run = _run(out_bin, timeout=20)
+        got = "".join(run.stdout.split())
+        if got != want:
+            return False, (f"[{backend}] got {got!r} want {want!r} -- an integer "
+                            f"is being printed with a format guessed from its NAME "
+                            f"instead of its declared type")
+    return True, "ok -- declared type wins over the name heuristic on all backends"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 
