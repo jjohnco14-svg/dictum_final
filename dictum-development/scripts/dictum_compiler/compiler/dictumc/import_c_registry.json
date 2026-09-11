@@ -49,21 +49,21 @@
   },
   "raylib": {
     "c": {
-      "blessed": false,
-      "note": "ran but exited -11: ')\\nINFO:     > rmodels:... loaded (optional)\\nINFO:     > raudio:.... loaded (optional)\\nWARNING: GLFW: Error: 65550 Description: X11: Failed to open display :97\\nWARNING: GLFW: Failed to initialize GLFW\\n'",
-      "recorded_at": "2026-09-11T02:08:07.259233+00:00",
+      "blessed": true,
+      "note": "ok ('INFO: Initializing raylib 5.5\\nINFO: Platform backend: DESKTOP (GLFW)\\nINFO: Suppo')",
+      "recorded_at": "2026-09-11T02:08:24.687674+00:00",
       "toolchain": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
     },
     "cpp": {
-      "blessed": false,
-      "note": "ran but exited -11: ')\\nINFO:     > rmodels:... loaded (optional)\\nINFO:     > raudio:.... loaded (optional)\\nWARNING: GLFW: Error: 65550 Description: X11: Failed to open display :97\\nWARNING: GLFW: Failed to initialize GLFW\\n'",
-      "recorded_at": "2026-09-11T02:08:07.829948+00:00",
+      "blessed": true,
+      "note": "ok ('INFO: Initializing raylib 5.5\\nINFO: Platform backend: DESKTOP (GLFW)\\nINFO: Suppo')",
+      "recorded_at": "2026-09-11T02:08:25.717536+00:00",
       "toolchain": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
     },
     "nim": {
-      "blessed": false,
-      "note": "ran but exited -11: ')\\nINFO:     > rmodels:... loaded (optional)\\nINFO:     > raudio:.... loaded (optional)\\nWARNING: GLFW: Error: 65550 Description: X11: Failed to open display :97\\nWARNING: GLFW: Failed to initialize GLFW\\n'",
-      "recorded_at": "2026-09-11T02:08:10.089965+00:00",
+      "blessed": true,
+      "note": "ok ('INFO: Initializing raylib 5.5\\nINFO: Platform backend: DESKTOP (GLFW)\\nINFO: Suppo')",
+      "recorded_at": "2026-09-11T02:08:28.092149+00:00",
       "toolchain": "Nim Compiler Version 1.6.14 [Linux: amd64]"
     }
   },

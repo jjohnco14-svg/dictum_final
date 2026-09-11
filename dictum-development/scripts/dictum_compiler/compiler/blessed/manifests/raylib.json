@@ -37,8 +37,8 @@
   },
   "needs_display": true,
   "_verified": {
-    "c": false,
-    "cpp": false,
-    "nim": false
+    "c": true,
+    "cpp": true,
+    "nim": true
   }
 }
