@@ -5055,6 +5055,48 @@ def test_r88_format_spec_follows_declared_type(tmp):
     return True, "ok -- declared type wins over the name heuristic on all backends"
 
 
+@regression("R89 `attempt` with a PRE-DECLARED result variable on nim. "
+            "`keep v ...` followed by `call f giving v` inside an attempt "
+            "block emitted `var v` a SECOND time -- 'redefinition of v' -- "
+            "so every attempt/on-success block using an already-declared "
+            "result variable failed to compile on nim while working on c "
+            "and cpp. `call ... giving` must DECLARE only when the name is "
+            "new, and ASSIGN otherwise")
+def test_r89_attempt_predeclared_result(tmp):
+    src = os.path.join(tmp, "att.dict")
+    open(src, "w").write(
+        'action risky takes nothing produces whole number\n'
+        '    return 5\n'
+        'end action\n'
+        'program p\n'
+        '    keep v as whole number with value 0\n'
+        '    attempt\n'
+        '        call risky giving v\n'
+        '    on success\n'
+        '        print the text "ok=" and v\n'
+        '    on failure\n'
+        '        print the text "fail"\n'
+        '    end attempt\n'
+        'end program\n'
+    )
+    for backend in ("c", "cpp", "nim"):
+        if backend == "nim" and shutil.which("nim") is None:
+            continue
+        out_bin = os.path.join(tmp, f"a_{backend}")
+        r = subprocess.run(
+            [sys.executable, CLI, src, "--backend", backend, "--compile",
+             "--output", out_bin],
+            capture_output=True, text=True, timeout=180, cwd=HERE)
+        if r.returncode != 0:
+            return False, (f"[{backend}] build failed -- `call giving` is likely "
+                            f"redeclaring an existing variable: "
+                            f"{(r.stdout + r.stderr)[-300:]}")
+        run = _run(out_bin, timeout=20)
+        if "ok=5" not in run.stdout:
+            return False, f"[{backend}] unexpected output: {run.stdout!r}"
+    return True, "ok -- attempt with a pre-declared result works on all backends"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

@@ -703,7 +703,17 @@ class NimEmitter:
             if node.call:
                 call_str = self.expr_to_nim(node.call)
                 if node.result_name:
-                    self.emit(f"var {_nim_ident(node.result_name)} = {call_str}")
+                    # Only DECLARE if this name is new; otherwise ASSIGN.
+                    # `keep v ... ` followed by `call f giving v` emitted
+                    # `var v` twice -- "redefinition of 'v'" -- which made
+                    # every `attempt ... on success` block using a
+                    # pre-declared result variable fail to compile on nim.
+                    if _nim_ident(node.result_name) in self.declared_vars \
+                            or node.result_name in self.declared_vars:
+                        self.emit(f"{_nim_ident(node.result_name)} = {call_str}")
+                    else:
+                        self.declared_vars[node.result_name] = ""
+                        self.emit(f"var {_nim_ident(node.result_name)} = {call_str}")
                 else:
                     self.emit(call_str)
             self.emit("try:")
