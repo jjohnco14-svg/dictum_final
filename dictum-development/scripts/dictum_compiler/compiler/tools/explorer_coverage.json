@@ -1,0 +1,30 @@
+{
+  "pairs": {
+    "action|foreach_unused": 1,
+    "glist_int|repeat_loop": 1,
+    "glist_int|stdlib_math_sqrt": 1,
+    "arith_modulo|higher_order": 1,
+    "action|stdlib_text_upper": 1,
+    "action|while_loop": 1,
+    "glist_int|stdlib_text_roundtrip": 1,
+    "action|module": 1,
+    "arith_plus|arith_times": 1,
+    "repeat_loop|stdlib_math_sqrt": 1,
+    "stdlib_text_roundtrip|while_loop": 1,
+    "stdlib_text_roundtrip|stdlib_text_upper": 1,
+    "higher_order|repeat_loop": 1,
+    "glist_text|higher_order": 1,
+    "module|stdlib_text_roundtrip": 1,
+    "if_greater|module": 1,
+    "arith_modulo|while_loop": 1,
+    "glist_int|stdlib_text_upper": 1,
+    "arith_plus|stdlib_text_upper": 1,
+    "arith_modulo|stdlib_text_roundtrip": 1,
+    "module|stdlib_math_sqrt": 1,
+    "shape|stdlib_text_roundtrip": 1,
+    "glist_text|if_less": 1,
+    "arith_plus|if_greater": 1
+  },
+  "runs": 2,
+  "findings": []
+}
