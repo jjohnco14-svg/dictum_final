@@ -1283,8 +1283,22 @@ class CppEmitter:
                 call_expr = self.expr_to_cpp(node.call)
                 result = node.result_name or "__result"
                 inferred = self._infer_type_from_expr(node.call) or "auto"
-                self._emit_own_line(node, f"auto {result} = {call_expr};")
-                self.declared_vars[result] = inferred
+                # Only DECLARE when the name is new; otherwise ASSIGN.
+                # `keep v ...` then `call f giving v` inside an attempt
+                # emitted `auto v = ...` INSIDE THE TRY SCOPE, shadowing the
+                # outer v. The outer variable kept its old value, so every
+                # read after the attempt saw the stale one -- the program
+                # compiled cleanly and silently produced a WRONG ANSWER.
+                # Nim had the same bug but reported it loudly as
+                # "redefinition of 'v'" (R89); C++ shadowing is worse
+                # precisely because nothing complains. Found by writing a
+                # real program that called an FFI function inside an
+                # attempt and then tested the result.
+                if result in self.declared_vars:
+                    self._emit_own_line(node, f"{result} = {call_expr};")
+                else:
+                    self._emit_own_line(node, f"auto {result} = {call_expr};")
+                    self.declared_vars[result] = inferred
             for stmt in node.success_body:
                 self._emit_marked(stmt)
             self.indent -= 1

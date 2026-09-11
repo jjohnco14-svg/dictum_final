@@ -223,15 +223,19 @@ def build(feature: str, context: str, feats=None, wrapper="none"):
         # then reported the resulting scope error as a compiler bug -- it
         # was the tool's mistake.)
         pre, body, post = wrap_body(
-            setup + work + [f'print the text "r=" and {rvar}'], wrapper, 1)
+            setup + work + [f'print the text "r=" and {rvar}'], wrapper, 0)
         src = (uses + ("\n" + shape_decl + "\n" if shape_decl else "") +
                "\nprogram main\n\n" + ind(pre, 1) + ind(body, 1) +
-               ind(post, 0) + "\nend program\n")
+               ind(post, 1) + "\nend program\n")
         return src, None, expected
 
     if context == "in_action":
-        pre, wb, post = wrap_body(setup + work, wrapper, 1)
-        body = ind(pre, 1) + ind(wb, 1) + ind(post, 0) + f"    return {rvar}\n"
+        # Declarations stay OUTSIDE the wrapper so `return rvar` below is
+        # still in scope -- the same scoping discipline the loop contexts
+        # needed.
+        pre, wb, post = wrap_body(work, wrapper, 0)
+        body = (ind(setup, 1) + ind(pre, 1) + ind(wb, 1) + ind(post, 1)
+                + f"    return {rvar}\n")
         src = (uses + ("\n" + shape_decl + "\n" if shape_decl else "") +
                f"\naction compute_{tag} takes nothing produces {rtype}\n{body}end action\n"
                "\nprogram main\n\n"

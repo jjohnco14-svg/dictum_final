@@ -5263,6 +5263,62 @@ def test_r92_module_only_runtime_includes(tmp):
     return True, "ok -- attempt inside a module works on all backends"
 
 
+@regression("R93 `attempt` must ASSIGN to a pre-declared result variable, "
+            "not shadow it. C++ emitted `auto v = ...` INSIDE THE TRY "
+            "SCOPE, declaring a new local that shadowed the outer v -- so "
+            "every read after the attempt saw the stale value. The program "
+            "COMPILED CLEANLY and silently produced a wrong answer. Nim had "
+            "the same bug but reported it loudly as 'redefinition of v' "
+            "(R93's sibling, R89); C++ shadowing is strictly worse because "
+            "nothing complains. This test asserts the VALUE and that all "
+            "backends AGREE, which is the only way to catch it")
+def test_r93_attempt_result_not_shadowed(tmp):
+    if not os.path.exists("/usr/include/sqlite3.h"):
+        return None, "SKIP: libsqlite3-dev not available"
+    src = os.path.join(tmp, "att2.dict")
+    open(src, "w").write(
+        'import from C the action sqlite3_libversion_number takes nothing '
+        'produces whole number as sqlite_ver\n\n'
+        'program main\n'
+        '    keep v as whole number with value 0\n'
+        '    attempt\n'
+        '        call sqlite_ver giving v\n'
+        '    on success\n'
+        '        print the text "ok=1"\n'
+        '    on failure\n'
+        '        print the text "ok=0"\n'
+        '    end attempt\n'
+        '    keep modern as whole number with value 0\n'
+        '    if v is greater than 3000000 then\n'
+        '        put 1 into modern\n'
+        '    end if\n'
+        '    print the text "modern=" and modern\n'
+        'end program\n')
+
+    outputs = {}
+    for backend in ("c", "cpp", "nim"):
+        if backend == "nim" and shutil.which("nim") is None:
+            continue
+        out_bin = os.path.join(tmp, f"at2_{backend}")
+        r = subprocess.run(
+            [sys.executable, CLI, src, "--backend", backend, "--compile",
+             "--output", out_bin, "--link", "sqlite3"],
+            capture_output=True, text=True, timeout=200, cwd=HERE)
+        if r.returncode != 0:
+            return False, f"[{backend}] build failed: {(r.stdout+r.stderr)[-300:]}"
+        run = _run(out_bin, timeout=20)
+        outputs[backend] = "".join(run.stdout.split())
+
+    for b, got in outputs.items():
+        if "modern=1" not in got:
+            return False, (f"[{b}] got {got!r} -- the attempt's result variable "
+                            f"is being SHADOWED rather than assigned, so the "
+                            f"outer variable kept its stale value")
+    if len(set(outputs.values())) > 1:
+        return False, f"backends DISAGREE: {outputs}"
+    return True, "ok -- attempt result assigns to the outer variable on all backends"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 
