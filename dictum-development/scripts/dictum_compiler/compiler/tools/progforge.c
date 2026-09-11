@@ -333,6 +333,149 @@ static void gen_shape_block(Program *p, int *lineno) {
     bappend(&p->expected, "s%d=%ld", id, w * h);
 }
 
+
+/* ---------------------------------------------------------------------
+ * ARCHETYPES: synthesise programs the way a PERSON writes them
+ *
+ * The single clearest finding of this project's reliability work: mutation
+ * fuzzing ran thousands of rounds and found nothing, while one hand-written
+ * 3-module program found two real bugs in minutes. The reason is not that
+ * humans are luckier -- it is that real programs COMBINE features in shapes
+ * nobody picked deliberately:
+ *
+ *   - a module exporting BOTH an int-returning and a text-returning action
+ *     (only that combination revealed the header-whitelist bug class)
+ *   - a variable legitimately named `out` (crashed the Nim compiler)
+ *   - a `for each` body that ignores its loop variable (-Werror=unused)
+ *   - a caller-allocated buffer passed to an out-parameter (segfaulted on
+ *     two backends)
+ *
+ * So rather than mutate fragments, this generates whole programs from
+ * ARCHETYPES -- realistic shapes with randomised details -- while still
+ * computing the expected output itself, so correctness is checked rather
+ * than merely "did it crash".
+ *
+ * Written in C so the generation and expected-value evaluation are
+ * effectively free; wall-clock is dominated by the real compilers, which
+ * is where it belongs.
+ * ------------------------------------------------------------------- */
+
+/* Archetype: a module exporting actions of DIFFERENT return types, used by
+ * a program. This is the exact shape that exposed the header-completeness
+ * bug class -- and it stays valuable because any NEW return type added to
+ * the language lands here automatically. */
+static void arch_mixed_return_module(Program *p, int *lineno) {
+    int id = (*lineno)++;
+    long mul = rndrange(2, 9), arg = rndrange(2, 11);
+    p->multifile = 1;
+    bappend(&p->module_src, "module helper\n\n");
+    bappend(&p->module_src,
+        "    action scale takes n as whole number produces whole number\n"
+        "        keep out as whole number with value 0\n"      /* nim-reserved name */
+        "        put n times %ld into out\n"
+        "        return out\n"
+        "    end action\n\n", mul);
+    bappend(&p->module_src,
+        "    action tag takes nothing produces text\n"
+        "        keep type as text with value \"t%d\"\n"        /* nim-reserved name */
+        "        return type\n"
+        "    end action\n\n", id);
+    bappend(&p->module_src,
+        "    action flag takes nothing produces truth value\n"
+        "        keep b as truth value with value 1\n"
+        "        return b\n"
+        "    end action\n\n");
+    bappend(&p->module_src, "end module\n");
+
+    bappend(&p->main_src, "    keep s%d as whole number with value 0\n", id);
+    bappend(&p->main_src, "    call helper.scale with %ld giving s%d\n", arg, id);
+    bappend(&p->main_src, "    print the text \"a%d=\" and s%d\n", id, id);
+    bappend(&p->expected, "a%d=%ld", id, arg * mul);
+
+    bappend(&p->main_src, "    keep t%d as text with value \"\"\n", id);
+    bappend(&p->main_src, "    call helper.tag giving t%d\n", id);
+    bappend(&p->main_src, "    print the text \"b%d=\" and t%d\n", id, id);
+    bappend(&p->expected, "b%d=t%d", id, id);
+}
+
+/* Archetype: accumulate over a growable list of a RANDOM element type.
+ * Dynamic collections were whole-number-only on the C backend until
+ * recently; randomising the element type keeps that honest. */
+static void arch_collection_pipeline(Program *p, int *lineno) {
+    int id = (*lineno)++;
+    long n = rndrange(2, 5);
+    long total = 0, vals[8];
+    for (long i = 0; i < n; i++) { vals[i] = rndrange(1, 20); total += vals[i]; }
+    bappend(&p->main_src, "    keep xs%d as growable list of whole number with no value\n", id);
+    for (long i = 0; i < n; i++)
+        bappend(&p->main_src, "    add %ld to xs%d\n", vals[i], id);
+    bappend(&p->main_src, "    keep sum%d as whole number with value 0\n", id);
+    bappend(&p->main_src, "    for each e%d in xs%d repeat\n", id, id);
+    bappend(&p->main_src, "        put sum%d plus e%d into sum%d\n", id, id, id);
+    bappend(&p->main_src, "    end for\n");
+    bappend(&p->main_src, "    print the text \"c%d=\" and sum%d and \",n=\" and the count of xs%d\n",
+            id, id, id);
+    bappend(&p->expected, "c%d=%ld,n=%ld", id, total, n);
+}
+
+/* Archetype: a `for each` whose body IGNORES the loop variable. Trivial to
+ * write by hand, impossible to reach by mutating a body that uses it --
+ * and it was a real -Werror=unused-variable build failure on c AND cpp. */
+static void arch_unused_loop_var(Program *p, int *lineno) {
+    int id = (*lineno)++;
+    long n = rndrange(2, 4), step = rndrange(1, 5);
+    bappend(&p->main_src, "    keep ys%d as growable list of whole number with no value\n", id);
+    for (long i = 0; i < n; i++)
+        bappend(&p->main_src, "    add %ld to ys%d\n", rndrange(1, 9), id);
+    bappend(&p->main_src, "    keep k%d as whole number with value 0\n", id);
+    bappend(&p->main_src, "    for each ignored%d in ys%d repeat\n", id, id);
+    bappend(&p->main_src, "        put k%d plus %ld into k%d\n", id, step, id);
+    bappend(&p->main_src, "    end for\n");
+    bappend(&p->main_src, "    print the text \"d%d=\" and k%d\n", id, id);
+    bappend(&p->expected, "d%d=%ld", id, n * step);
+}
+
+/* Archetype: stdlib round-trip. Any `use Text` program failed outright on
+ * nim until the stdlib bridge landed, and 33 of 92 stdlib functions still
+ * needed an undiscoverable flag on c/cpp. */
+static void arch_stdlib_roundtrip(Program *p, int *lineno) {
+    int id = (*lineno)++;
+    long v = rndrange(10, 9999);
+    bappend(&p->prelude, "use Text\n");
+    bappend(&p->main_src, "    keep n%d as whole number with value %ld\n", id, v);
+    bappend(&p->main_src, "    keep s%d as text with value \"\"\n", id);
+    bappend(&p->main_src, "    call Text.from_int with n%d giving s%d\n", id, id);
+    bappend(&p->main_src, "    keep back%d as whole number with value 0\n", id);
+    bappend(&p->main_src, "    call Text.to_number with s%d giving back%d\n", id, id);
+    bappend(&p->main_src, "    print the text \"e%d=\" and back%d\n", id, id);
+    bappend(&p->expected, "e%d=%ld", id, v);
+}
+
+/* Archetype: pass an action as a value. The function-TYPE annotation was
+ * documented and parsed long before an action name could be USED as one --
+ * and the C++ backend then returned wrong answers for every signature. */
+static void arch_higher_order(Program *p, int *lineno) {
+    int id = (*lineno)++;
+    long mul = rndrange(2, 7), arg = rndrange(2, 15);
+    bappend(&p->prelude,
+        "action mul%d takes n as whole number produces whole number\n"
+        "    keep r as whole number with value 0\n"
+        "    put n times %ld into r\n"
+        "    return r\n"
+        "end action\n\n", id, mul);
+    bappend(&p->prelude,
+        "action applyf%d takes f as action taking A as whole number produces whole number "
+        "and v as whole number produces whole number\n"
+        "    keep r as whole number with value 0\n"
+        "    call f with v giving r\n"
+        "    return r\n"
+        "end action\n\n", id);
+    bappend(&p->main_src, "    keep h%d as whole number with value 0\n", id);
+    bappend(&p->main_src, "    call applyf%d with mul%d and %ld giving h%d\n", id, id, arg, id);
+    bappend(&p->main_src, "    print the text \"f%d=\" and h%d\n", id, id);
+    bappend(&p->expected, "f%d=%ld", id, arg * mul);
+}
+
 static void gen_module_with_actions(Program *p, int *lineno) {
     /* A module exporting BOTH an int-returning and a text-returning action.
      * This exact shape is what exposed the missing dictum_text entry in the
@@ -378,8 +521,21 @@ static void generate(Program *p) {
     /* shapes are emitted into prelude and must appear BEFORE `program`;
      * spliced together at write time (see write_main_dict). */
 
-    int nblocks = (int)rndrange(2, 5);
-    if (p->multifile) gen_module_with_actions(p, &lineno);
+    /* ARCHETYPE-FIRST generation: every program starts from at least one
+     * realistic whole-program shape, then gets extra blocks layered on.
+     * Mutating fragments never reaches these shapes. */
+    int narch = (int)rndrange(1, 2);
+    for (int a = 0; a < narch; a++) {
+        switch (rndrange(0, 4)) {
+            case 0: arch_mixed_return_module(p, &lineno); break;
+            case 1: arch_collection_pipeline(p, &lineno); break;
+            case 2: arch_unused_loop_var(p, &lineno);     break;
+            case 3: arch_stdlib_roundtrip(p, &lineno);    break;
+            default: arch_higher_order(p, &lineno);       break;
+        }
+    }
+    int nblocks = (int)rndrange(1, 3);
+    if (p->multifile && !p->module_src.len) gen_module_with_actions(p, &lineno);
 
     for (int i = 0; i < nblocks; i++) {
         switch (rndrange(0, 8)) {
@@ -434,6 +590,23 @@ static int write_main_dict(const char *path, Program *p) {
     FILE *f = fopen(path, "w");
     if (!f) return -1;
     if (p->prelude.len) fputs(p->prelude.src, f);
+    /* An archetype may decide this program needs a module AFTER the
+     * `program main` header was already emitted, so the `use helper` line
+     * is injected here rather than at header-write time. (Without this the
+     * generator produced programs calling helper.* with no `use` -- a bug
+     * in the GENERATOR that looked exactly like a compiler bug.) */
+    if (p->module_src.len && !strstr(p->main_src.src, "use helper")) {
+        const char *hdr = "program main\n";
+        const char *at = strstr(p->main_src.src, hdr);
+        if (at) {
+            size_t upto = (size_t)(at - p->main_src.src) + strlen(hdr);
+            fwrite(p->main_src.src, 1, upto, f);
+            fputs("\n    use helper\n", f);
+            fputs(p->main_src.src + upto, f);
+            fclose(f);
+            return 0;
+        }
+    }
     fputs(p->main_src.src, f);
     fclose(f);
     return 0;

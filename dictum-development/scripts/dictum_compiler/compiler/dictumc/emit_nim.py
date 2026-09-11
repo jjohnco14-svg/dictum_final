@@ -158,6 +158,7 @@ class NimEmitter:
         self._needs_strformat = False
         self._stdlib_used = {}
         self._ffi_sigs = {}
+        self._needs_math = False
         # Names of `import from C`/`import from C++` functions whose
         # real Dictum return type is `text` -- see R-NIM-11 below for
         # why this has to be tracked at all.
@@ -384,6 +385,26 @@ class NimEmitter:
                 if _t.startswith("seq["):
                     return f"cast[pointer](addr({_o}[0]))"
                 return f"cast[pointer](addr({_o}))"
+            # Math / pointer unary ops must emit as FUNCTION CALLS, not as
+            # prefix operators. Falling through to the generic prefix path
+            # produced `(sqrtx)` -- a single undefined identifier -- which
+            # is silent malformed output rather than an error. Found
+            # mechanically by tools/backend_parity.py: c and cpp both
+            # handled these ops, nim did not.
+            _NIM_FN_OPS = {
+                "sqrt": "sqrt", "sin": "sin", "cos": "cos", "tanh": "tanh",
+                "exp": "exp", "log": "ln", "abs": "abs",
+                "floor": "floor", "ceil": "ceil", "round": "round",
+            }
+            if node.op in _NIM_FN_OPS:
+                self._needs_math = True
+                return f"{_NIM_FN_OPS[node.op]}({self.expr_to_nim(node.operand)})"
+            if node.op == "neg" or node.op == "negative":
+                return f"(-({self.expr_to_nim(node.operand)}))"
+            if node.op == "deref":
+                return f"{self.expr_to_nim(node.operand)}[]"
+            if node.op == "addrof":
+                return f"cast[pointer](addr({self.expr_to_nim(node.operand)}))"
             if node.op in ("count", "length"):
                 operand = self.expr_to_nim(node.operand)
                 return f"len({operand})"
@@ -963,6 +984,9 @@ class NimEmitter:
                 self.output.insert(at + off, l)
             body_text = "\n".join(self.output)
 
+        if (getattr(self, "_needs_math", False) or "sqrt(" in body_text) \
+                and "import std/math" not in body_text:
+            needed.append("import std/math")
         if "Table[" in body_text and "import std/tables" not in body_text:
             needed.append("import std/tables")
         if "HashSet[" in body_text and "import std/sets" not in body_text:

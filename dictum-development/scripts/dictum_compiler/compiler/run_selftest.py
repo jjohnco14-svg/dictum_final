@@ -4984,6 +4984,34 @@ def test_r86_unblessed_library_ffi(tmp):
     return True, f"ok -- unblessed libuuid works on {sorted(seen)}"
 
 
+@regression("R87 BACKEND PARITY: the three emitters consume the same AST, so "
+            "a node type or operator handled by one and not another is a gap "
+            "by construction. This is the single most recurring bug shape in "
+            "this project -- works on 1-2 backends, silently wrong on the "
+            "third (emit_nim dropped every `use`; emit_cpp lacked emit_c's "
+            "cross-file hoisting fix; emit_cpp hardcoded "
+            "std::function<bool(int32_t)> and returned WRONG ANSWERS). "
+            "tools/backend_parity.py diffs the handler sets; every remaining "
+            "asymmetry must be listed in ALLOWED_ABSENCE with a stated "
+            "reason, so divergence is a documented decision rather than an "
+            "accident. On its first run it found nim missing sqrt/sin/cos/"
+            "neg/deref -- `the square root of x` emitted `(sqrtx)`, a single "
+            "undefined identifier")
+def test_r87_backend_parity(tmp):
+    tool = os.path.join(HERE, "tools", "backend_parity.py")
+    if not os.path.exists(tool):
+        return False, "tools/backend_parity.py missing"
+    r = subprocess.run([sys.executable, tool], capture_output=True,
+                       text=True, timeout=120, cwd=HERE)
+    if r.returncode != 0:
+        gaps = [l.strip() for l in r.stdout.splitlines() if l.strip().startswith("[")]
+        return False, ("unexplained backend parity gap(s) -- either fix the "
+                        f"backend or document the asymmetry with a reason: {gaps}")
+    if "no unexplained parity gaps" not in r.stdout:
+        return False, f"unexpected output: {r.stdout[-300:]}"
+    return True, "ok -- no unexplained divergence between the three emitters"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 
