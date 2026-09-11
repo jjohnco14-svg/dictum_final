@@ -5319,6 +5319,51 @@ def test_r93_attempt_result_not_shadowed(tmp):
     return True, "ok -- attempt result assigns to the outer variable on all backends"
 
 
+@regression("R94 backend-independent type semantics live in ONE shared "
+            "table (dictumc/type_semantics.py), not duplicated per emitter. "
+            "emit_c and emit_cpp each had their own printf-format decision "
+            "-- only ~35%% textually similar, yet BOTH contained the same "
+            "bug: a known integer fell through to a heuristic that guessed "
+            "from the VARIABLE NAME, so `keep price as whole number` "
+            "printed 'price=0.000000'. Textual similarity does not predict "
+            "drift; SEMANTIC duplication does. This test asserts the shared "
+            "table is authoritative, so a fix lands on every backend at "
+            "once rather than needing to be remembered three times")
+def test_r94_shared_type_semantics(tmp):
+    sys.path.insert(0, HERE)
+    from dictumc import type_semantics as ts
+
+    # Documented synonyms must compare equal -- comparing them as raw
+    # strings was a real bug (it rejected `add 1.5 to <list of decimal
+    # number>` because the literal inferred as 'fractional number').
+    if not ts.same_type("decimal number", "fractional number"):
+        return False, "documented synonyms do not compare equal"
+    if ts.same_type("whole number", "decimal number"):
+        return False, "distinct types compare equal"
+
+    # A KNOWN type must yield a definite spec; an UNKNOWN one must return
+    # None rather than guessing -- returning a guess here is what let the
+    # name heuristic override a declared type.
+    for t, want in (("whole number", "%d"), ("decimal number", "%f"),
+                    ("text", "%s"), ("truth value", "%d"),
+                    ("int32_t", "%d"), ("double", "%f"), ("dictum_text", "%s")):
+        got = ts.printf_spec(t)
+        if got != want:
+            return False, f"printf_spec({t!r}) = {got!r}, expected {want!r}"
+    if ts.printf_spec("some_unknown_struct_t") is not None:
+        return False, ("an UNKNOWN type must return None rather than a guess -- "
+                        "guessing here is what allowed a name heuristic to "
+                        "override a declared type")
+
+    # And the emitters must actually CONSULT it.
+    for mod in ("emit_c.py", "emit_cpp.py"):
+        src = open(os.path.join(HERE, "dictumc", mod)).read()
+        if "type_semantics" not in src:
+            return False, (f"{mod} does not consult the shared type table -- "
+                            f"it has drifted back to its own copy")
+    return True, "ok -- one shared table, consulted by both C-family emitters"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

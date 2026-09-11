@@ -21,6 +21,7 @@ from typing import List, Dict, Optional, Set, Tuple, Any
 
 from .line_directives import format_line_directive, DEFAULT_SOURCE_FILENAME
 
+from . import type_semantics as _type_sem
 from .ast_nodes import (
     Node, Program, Module, Shape, Method, Constructor, Destructor,
     VarDecl, Assignment, Action, FuncCall, Return, If, While, ForEach,
@@ -1649,6 +1650,13 @@ class CppEmitter:
                 return "%s"
             if t in ('fractional number', 'decimal number'):
                 return "%f"
+            # SHARED SEMANTICS -- see emit_c.py's _format_spec and
+            # dictumc/type_semantics.py. These two emitters answered this
+            # same question with separate code and drifted into an
+            # identical bug.
+            _shared = _type_sem.printf_spec(t)
+            if _shared is not None and 'size_t' not in t:
+                return _shared
             if 'double' in t or 'float' in t: return "%f"
             if 'char' in t:                   return "%s"
             if 'size_t' in t:                 return "%zu"

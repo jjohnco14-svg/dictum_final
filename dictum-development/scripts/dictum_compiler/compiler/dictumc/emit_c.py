@@ -25,6 +25,7 @@ from typing import List, Dict, Optional, Set, Tuple, Any, FrozenSet
 
 from .line_directives import format_line_directive, DEFAULT_SOURCE_FILENAME
 
+from . import type_semantics as _type_sem
 from .ast_nodes import (
     Node, Program, Module, Shape, Method, Constructor, Destructor,
     VarDecl, Assignment, Action, FuncCall, Return, If, While, ForEach,
@@ -2428,6 +2429,15 @@ class CEmitter:
             return "%d"
         if isinstance(p, Identifier):
             t = (self.declared_vars.get(p.name, '') or '').strip()
+            # SHARED SEMANTICS: one table, consulted by every backend.
+            # emit_c and emit_cpp each had their own copy of this decision
+            # and BOTH contained the same bug (a known int falling through
+            # to a name guess, so `price` printed as %f). A fix here lands
+            # on all backends at once, which separate copies never did.
+            _shared = _type_sem.printf_spec(t)
+            if _shared is not None:
+                return "%zu" if t == "size_t" else (
+                       "%lld" if t in ("int64_t", "uint64_t") else _shared)
             if t in ('double', 'float'):   return "%f"
             if t in ('dictum_text', 'const char*', 'char*'): return "%s"
             if t == 'bool':                return "%d"
