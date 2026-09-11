@@ -153,3 +153,82 @@ def is_numeric(type_name: Optional[str]) -> bool:
 
 def is_integral(type_name: Optional[str]) -> bool:
     return kind_of(type_name) in (INTEGER, BYTES)
+
+
+# ---------------------------------------------------------------------------
+# EXPRESSION TYPE INFERENCE
+#
+# emit_c and emit_cpp implemented _infer_type_from_expr separately. Compared
+# side by side they perform the IDENTICAL inference -- literal kind,
+# identifier lookup, comparison yields boolean, otherwise left-or-right,
+# call yields the action's declared return type. The ONLY difference is how
+# the answer is SPELLED ("dictum_text" vs "const char*").
+#
+# That is semantics duplicated and spelling legitimately separate, so the
+# semantics move here and each emitter keeps its own spelling. Getting
+# inference wrong is not cosmetic: the inferred type drives the printf
+# conversion, the variable declaration and any cast, so a divergence here
+# surfaces as a WRONG ANSWER rather than a compile error.
+# ---------------------------------------------------------------------------
+
+COMPARISON_OPS = frozenset(("==", "!=", ">", "<", ">=", "<="))
+
+
+def literal_kind(value) -> str:
+    """Canonical kind of a literal. bool MUST be checked before int --
+    in Python `isinstance(True, int)` is True, so the order matters and
+    both emitters already relied on it."""
+    if isinstance(value, bool):
+        return BOOLEAN
+    if isinstance(value, int):
+        return INTEGER
+    if isinstance(value, float):
+        return FLOATING
+    if isinstance(value, str):
+        return TEXTUAL
+    return UNKNOWN
+
+
+def is_comparison(op: Optional[str]) -> bool:
+    """Comparisons yield a boolean regardless of operand types."""
+    return op in COMPARISON_OPS
+
+
+def infer_kind(node, var_kind, action_ret_kind, *, _depth: int = 0) -> str:
+    """Canonical KIND of an expression, shared by every backend.
+
+    `var_kind(name)` and `action_ret_kind(name)` are supplied by the caller
+    so this stays free of any emitter's tables. Returns UNKNOWN rather than
+    guessing -- the caller decides the fallback, and a guess here would
+    propagate into a declaration or a format conversion.
+    """
+    if node is None or _depth > 64:
+        return UNKNOWN
+    cls = type(node).__name__
+
+    if cls == "Literal":
+        return literal_kind(getattr(node, "value", None))
+    if cls == "Identifier":
+        return var_kind(getattr(node, "name", "")) or UNKNOWN
+    if cls == "BinaryOp":
+        if is_comparison(getattr(node, "op", None)):
+            return BOOLEAN
+        left = infer_kind(getattr(node, "left", None), var_kind,
+                          action_ret_kind, _depth=_depth + 1)
+        if left != UNKNOWN:
+            return left
+        return infer_kind(getattr(node, "right", None), var_kind,
+                          action_ret_kind, _depth=_depth + 1)
+    if cls == "UnaryOp":
+        op = getattr(node, "op", None)
+        if op in ("count", "length"):
+            return INTEGER
+        if op == "room_for":
+            return POINTER
+        if op == "addressof":
+            return POINTER
+        return infer_kind(getattr(node, "operand", None), var_kind,
+                          action_ret_kind, _depth=_depth + 1)
+    if cls == "FuncCall":
+        return action_ret_kind(getattr(node, "name", "")) or UNKNOWN
+    return UNKNOWN

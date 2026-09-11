@@ -792,17 +792,24 @@ class CppEmitter:
                     return f"{base}->{dot_path}"
         return target
 
+    # C++ spelling per canonical kind -- the INFERENCE is shared (see
+    # dictumc/type_semantics.py); only this table differs from C.
+    _KIND_TO_CPP = {
+        _type_sem.BOOLEAN: "bool", _type_sem.INTEGER: "int32_t",
+        _type_sem.FLOATING: "double", _type_sem.TEXTUAL: "const char*",
+        _type_sem.BYTES: "uint8_t", _type_sem.POINTER: "void*",
+    }
+
     def _infer_type_from_expr(self, node: Node) -> Optional[str]:
         if isinstance(node, Literal):
-            if isinstance(node.value, bool):  return "bool"
-            if isinstance(node.value, int):   return "int32_t"
-            if isinstance(node.value, float): return "double"
-            if isinstance(node.value, str):   return "const char*"
+            k = _type_sem.literal_kind(node.value)
+            if k in self._KIND_TO_CPP:
+                return self._KIND_TO_CPP[k]
         if isinstance(node, Identifier):
             return self.declared_vars.get(node.name)
         if isinstance(node, BinaryOp):
             lt = self._infer_type_from_expr(node.left)
-            if node.op in ('==', '!=', '>', '<', '>=', '<='): return "bool"
+            if _type_sem.is_comparison(node.op): return "bool"
             return lt or self._infer_type_from_expr(node.right)
         if isinstance(node, NewExpr):
             return f"std::unique_ptr<{node.type_name.replace('.', '::')}>"

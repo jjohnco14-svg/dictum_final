@@ -5364,6 +5364,58 @@ def test_r94_shared_type_semantics(tmp):
     return True, "ok -- one shared table, consulted by both C-family emitters"
 
 
+@regression("R95 the C and C++ emitters must AGREE on the inferred kind of "
+            "the same expression. Both implemented _infer_type_from_expr "
+            "separately while performing identical inference -- only the "
+            "SPELLING differed (dictum_text vs const char*). Inference is "
+            "not cosmetic: the inferred type drives the printf conversion, "
+            "the declaration and any cast, so a divergence shows up as a "
+            "WRONG ANSWER rather than a compile error. This compares the "
+            "two emitters directly on the same AST, which is the only way "
+            "to catch divergence that both sides compile happily")
+def test_r95_emitters_agree_on_inference(tmp):
+    sys.path.insert(0, HERE)
+    from dictumc.emit_c import CEmitter
+    from dictumc.emit_cpp import CppEmitter
+    from dictumc import type_semantics as ts
+    from dictumc.ast_nodes import BinaryOp, Literal, UnaryOp
+
+    ec, ecpp = CEmitter(), CppEmitter()
+    # Spelling differs by design; compare the KIND each spelling denotes.
+    cases = [
+        ("int literal",      Literal(value=7)),
+        ("float literal",    Literal(value=1.5)),
+        ("bool literal",     Literal(value=True)),
+        ("text literal",     Literal(value="s")),
+        ("comparison >",     BinaryOp(op=">", left=Literal(value=3),
+                                      right=Literal(value=1))),
+        ("comparison <=",    BinaryOp(op="<=", left=Literal(value=3),
+                                      right=Literal(value=1))),
+        ("comparison !=",    BinaryOp(op="!=", left=Literal(value=3),
+                                      right=Literal(value=1))),
+        ("arithmetic +",     BinaryOp(op="+", left=Literal(value=3),
+                                      right=Literal(value=1))),
+        ("float arithmetic", BinaryOp(op="+", left=Literal(value=1.5),
+                                      right=Literal(value=2.5))),
+    ]
+    for label, node in cases:
+        kc = ts.kind_of(ec._infer_type_from_expr(node))
+        kp = ts.kind_of(ecpp._infer_type_from_expr(node))
+        if kc != kp:
+            return False, (f"[{label}] emitters DISAGREE on inferred kind: "
+                            f"c={kc!r} cpp={kp!r} -- the shared inference in "
+                            f"type_semantics.py has been bypassed by one of them")
+        if kc == ts.UNKNOWN:
+            return False, f"[{label}] inferred UNKNOWN on both -- inference regressed"
+
+    # A comparison must yield boolean, not the operand kind. Getting this
+    # wrong would type a condition as an integer.
+    cmp_node = BinaryOp(op=">", left=Literal(value=3), right=Literal(value=1))
+    if ts.kind_of(ec._infer_type_from_expr(cmp_node)) != ts.BOOLEAN:
+        return False, "a comparison did not infer as boolean"
+    return True, f"ok -- both emitters agree on all {len(cases)} expression kinds"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 
