@@ -1,0 +1,130 @@
+{
+  "_selftest_bogus": {
+    "c": {
+      "blessed": false,
+      "note": "output 'v:3.45.1' did not match 'THIS_CAN_NEVER_MATCH_XYZZY'",
+      "recorded_at": "2026-09-11T02:07:27.820948+00:00",
+      "toolchain": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    }
+  },
+  "glfw": {
+    "c": {
+      "blessed": true,
+      "note": "ok ('v:3.3.10 X11 GLX EGL OSMesa clock_gettime evdev shared')",
+      "recorded_at": "2026-09-11T02:08:04.060146+00:00",
+      "toolchain": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "cpp": {
+      "blessed": true,
+      "note": "ok ('v:3.3.10 X11 GLX EGL OSMesa clock_gettime evdev shared')",
+      "recorded_at": "2026-09-11T02:08:04.641584+00:00",
+      "toolchain": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "nim": {
+      "blessed": true,
+      "note": "ok ('v:3.3.10 X11 GLX EGL OSMesa clock_gettime evdev shared')",
+      "recorded_at": "2026-09-11T02:08:06.980634+00:00",
+      "toolchain": "Nim Compiler Version 1.6.14 [Linux: amd64]"
+    }
+  },
+  "openssl": {
+    "c": {
+      "blessed": true,
+      "note": "ok ('s:1')",
+      "recorded_at": "2026-09-11T02:07:56.955170+00:00",
+      "toolchain": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "cpp": {
+      "blessed": true,
+      "note": "ok ('s:1')",
+      "recorded_at": "2026-09-11T02:07:57.526064+00:00",
+      "toolchain": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "nim": {
+      "blessed": true,
+      "note": "ok ('s:1')",
+      "recorded_at": "2026-09-11T02:07:59.791435+00:00",
+      "toolchain": "Nim Compiler Version 1.6.14 [Linux: amd64]"
+    }
+  },
+  "raylib": {
+    "c": {
+      "blessed": false,
+      "note": "ran but exited -11: ')\\nINFO:     > rmodels:... loaded (optional)\\nINFO:     > raudio:.... loaded (optional)\\nWARNING: GLFW: Error: 65550 Description: X11: Failed to open display :97\\nWARNING: GLFW: Failed to initialize GLFW\\n'",
+      "recorded_at": "2026-09-11T02:08:07.259233+00:00",
+      "toolchain": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "cpp": {
+      "blessed": false,
+      "note": "ran but exited -11: ')\\nINFO:     > rmodels:... loaded (optional)\\nINFO:     > raudio:.... loaded (optional)\\nWARNING: GLFW: Error: 65550 Description: X11: Failed to open display :97\\nWARNING: GLFW: Failed to initialize GLFW\\n'",
+      "recorded_at": "2026-09-11T02:08:07.829948+00:00",
+      "toolchain": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "nim": {
+      "blessed": false,
+      "note": "ran but exited -11: ')\\nINFO:     > rmodels:... loaded (optional)\\nINFO:     > raudio:.... loaded (optional)\\nWARNING: GLFW: Error: 65550 Description: X11: Failed to open display :97\\nWARNING: GLFW: Failed to initialize GLFW\\n'",
+      "recorded_at": "2026-09-11T02:08:10.089965+00:00",
+      "toolchain": "Nim Compiler Version 1.6.14 [Linux: amd64]"
+    }
+  },
+  "sdl2": {
+    "c": {
+      "blessed": true,
+      "note": "ok ('r:0')",
+      "recorded_at": "2026-09-11T02:08:00.733943+00:00",
+      "toolchain": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "cpp": {
+      "blessed": true,
+      "note": "ok ('r:0')",
+      "recorded_at": "2026-09-11T02:08:01.346540+00:00",
+      "toolchain": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "nim": {
+      "blessed": true,
+      "note": "ok ('r:0')",
+      "recorded_at": "2026-09-11T02:08:03.695580+00:00",
+      "toolchain": "Nim Compiler Version 1.6.14 [Linux: amd64]"
+    }
+  },
+  "sqlite3": {
+    "c": {
+      "blessed": true,
+      "note": "ok ('v:3.45.1')",
+      "recorded_at": "2026-09-11T02:07:24.724378+00:00",
+      "toolchain": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "cpp": {
+      "blessed": true,
+      "note": "ok ('v:3.45.1')",
+      "recorded_at": "2026-09-11T02:07:25.277882+00:00",
+      "toolchain": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "nim": {
+      "blessed": true,
+      "note": "ok ('v:3.45.1')",
+      "recorded_at": "2026-09-11T02:07:27.571683+00:00",
+      "toolchain": "Nim Compiler Version 1.6.14 [Linux: amd64]"
+    }
+  },
+  "zlib": {
+    "c": {
+      "blessed": true,
+      "note": "ok ('zlib=1.3')",
+      "recorded_at": "2026-09-11T02:08:10.332383+00:00",
+      "toolchain": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "cpp": {
+      "blessed": true,
+      "note": "ok ('zlib=1.3')",
+      "recorded_at": "2026-09-11T02:08:10.871551+00:00",
+      "toolchain": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "nim": {
+      "blessed": true,
+      "note": "ok ('zlib=1.3')",
+      "recorded_at": "2026-09-11T02:08:13.219303+00:00",
+      "toolchain": "Nim Compiler Version 1.6.14 [Linux: amd64]"
+    }
+  }
+}

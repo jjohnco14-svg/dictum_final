@@ -1,0 +1,33 @@
+{
+  "library": "zlib",
+  "link": [
+    "z"
+  ],
+  "headers": [
+    "zlib.h"
+  ],
+  "shapes": [],
+  "imports": [
+    {
+      "c_name": "zlibVersion",
+      "params": [],
+      "returns": "text",
+      "alias": "zlibVersion"
+    },
+    {
+      "c_name": "zlibCompileFlags",
+      "params": [],
+      "returns": "opaque pointer",
+      "alias": "zlibCompileFlags"
+    }
+  ],
+  "verify": {
+    "body": "    keep v as text with value \"\"\n    call zlibVersion giving v\n    print the text \"zlib=\" and v",
+    "expect_regex": "zlib=\\d+\\.\\d+"
+  },
+  "_verified": {
+    "c": true,
+    "cpp": true,
+    "nim": true
+  }
+}

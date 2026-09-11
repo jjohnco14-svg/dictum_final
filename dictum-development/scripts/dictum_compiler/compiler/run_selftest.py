@@ -4565,7 +4565,51 @@ def test_r79_libmanifest_emit_and_verify(tmp):
     finally:
         if os.path.exists(bogus):
             os.remove(bogus)
-    return True, f"ok -- emit + verify genuine on {targets}"
+    # `add` (draft a manifest from a REAL header via libclang) and registry
+    # PERSISTENCE were both untested by the original R79, and both were
+    # silently broken: `add` invoked generate_import_c.py without its
+    # required --module-name/--output and expected stdout it never writes;
+    # record_blessing probed GUESSED function names, found none, and printed
+    # "registry has no recognized record function" -- so verify reported
+    # PASS while the registry stayed empty.
+    try:
+        import clang.cindex  # noqa: F401
+        have_clang = True
+    except Exception:
+        have_clang = False
+    if have_clang and os.path.exists("/usr/include/zlib.h"):
+        man_dir = os.path.join(HERE, "blessed", "manifests")
+        probe = os.path.join(man_dir, "_selftest_add.json")
+        try:
+            ra = subprocess.run(
+                [sys.executable, lm, "add", "_selftest_add",
+                 "--header", "/usr/include/zlib.h", "--link", "z",
+                 "--functions", "zlibVersion"],
+                capture_output=True, text=True, timeout=300, cwd=HERE)
+            if ra.returncode != 0:
+                return False, f"`add` failed against a real header: {ra.stdout}\n{ra.stderr}"
+            if not os.path.exists(probe):
+                return False, "`add` reported success but wrote no manifest"
+            drafted = json.load(open(probe))
+            names = [i["c_name"] for i in drafted.get("imports", [])]
+            if "zlibVersion" not in names:
+                return False, f"`add` drafted no zlibVersion binding: {names!r}"
+        finally:
+            if os.path.exists(probe):
+                os.remove(probe)
+
+    # Registry persistence: after verify, the verdict must be readable back.
+    try:
+        sys.path.insert(0, HERE)
+        from dictumc import import_c_registry as _reg
+        if _reg.is_blessed("sqlite3", "c") is not True:
+            return False, ("verify reported PASS but the registry does not "
+                            "record sqlite3/c as blessed -- verdicts are not "
+                            "being persisted")
+    except Exception as e:
+        return False, f"could not read back the blessing verdict: {e}"
+
+    return True, f"ok -- add + emit + verify + registry persistence on {targets}"
 
 
 @regression("R80 tools/dictation.py: the gated procedure for adding new "

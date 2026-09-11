@@ -162,29 +162,39 @@ def verify_target(m: dict, target: str, workdir: str) -> "tuple[bool, str]":
 
 
 def record_blessing(lib: str, target: str, blessed: bool, note: str) -> None:
-    """Record via the project's real import_c_registry, which is the single
-    source of truth for per-library/per-target verdicts."""
+    """Persist the verdict in the project's real import_c_registry, which is
+    the single source of truth for per-library/per-target blessing.
+
+    This used to probe a list of GUESSED function names and silently print
+    "registry has no recognized record function" when none matched -- so no
+    verdict was ever actually persisted and the registry stayed empty while
+    verify reported PASS. The real API is
+    register(library, target, blessed, toolchain, note)."""
     sys.path.insert(0, COMPILER_DIR)
     try:
         from dictumc import import_c_registry as reg
     except Exception as e:
-        print(f"  (could not record verdict: {e})")
+        print(f"  (could not import registry: {e})")
         return
-    for fn_name in ("record_verification", "record", "set_blessed", "bless"):
-        fn = getattr(reg, fn_name, None)
-        if callable(fn):
-            try:
-                fn(library=lib, target=target, blessed=blessed, note=note)
-                return
-            except TypeError:
-                try:
-                    fn(lib, target, blessed, note)
-                    return
-                except Exception:
-                    continue
-            except Exception:
-                continue
-    print(f"  (registry has no recognized record function; verdict not persisted)")
+    toolchain = {
+        "c": _tool_version("gcc"),
+        "cpp": _tool_version("g++"),
+        "nim": _tool_version("nim"),
+    }.get(target, target)
+    try:
+        reg.register(library=lib, target=target, blessed=blessed,
+                     toolchain=toolchain, note=note[:300])
+    except Exception as e:
+        print(f"  (registry write failed: {e})")
+
+
+def _tool_version(exe: str) -> str:
+    try:
+        r = subprocess.run([exe, "--version"], capture_output=True,
+                           text=True, timeout=20)
+        return (r.stdout or r.stderr).splitlines()[0][:80]
+    except Exception:
+        return exe
 
 
 def cmd_list(args) -> int:
@@ -246,10 +256,30 @@ def cmd_add(args) -> int:
     os.makedirs(MANIFEST_DIR, exist_ok=True)
     if not os.path.exists(GENERATE_IMPORT_C):
         raise SystemExit(f"missing {GENERATE_IMPORT_C}")
-    r = subprocess.run([sys.executable, GENERATE_IMPORT_C, args.header],
-                       capture_output=True, text=True, timeout=300)
-    if r.returncode != 0:
-        raise SystemExit(f"generate_import_c.py failed:\n{r.stderr[-1000:]}")
+    # generate_import_c.py writes the bridge to a FILE and requires
+    # --module-name/--output; it does not print to stdout. (This call was
+    # wrong until a real `add` was attempted end-to-end -- R79 only
+    # exercised `emit` and `verify`.)
+    with tempfile.TemporaryDirectory() as _td:
+        _out = os.path.join(_td, f"{args.library}_bridge.dict")
+        cmd = [sys.executable, GENERATE_IMPORT_C, args.header,
+               "--module-name", f"{args.library}_bridge", "--output", _out]
+        if args.only_prefix:
+            cmd += ["--only-prefix", args.only_prefix]
+        if args.functions:
+            cmd += ["--functions", ",".join(args.functions)]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if r.returncode != 0:
+            raise SystemExit(f"generate_import_c.py failed:\n"
+                             f"{(r.stderr or r.stdout)[-1200:]}")
+        if not os.path.exists(_out):
+            raise SystemExit(f"generate_import_c.py reported success but wrote "
+                             f"no file at {_out}")
+        generated = open(_out).read()
+    class _R:  # keep the parsing loop below unchanged
+        pass
+    r = _R()
+    r.stdout = generated
 
     imports, shapes = [], []
     cur_shape = None
@@ -317,6 +347,8 @@ def main() -> int:
 
     pa = sub.add_parser("add"); pa.add_argument("library")
     pa.add_argument("--header", required=True); pa.add_argument("--link", nargs="*")
+    pa.add_argument("--only-prefix", help="only bind functions with this prefix")
+    pa.add_argument("--functions", nargs="*", help="only bind these named functions")
     pa.set_defaults(func=cmd_add)
 
     args = ap.parse_args()
