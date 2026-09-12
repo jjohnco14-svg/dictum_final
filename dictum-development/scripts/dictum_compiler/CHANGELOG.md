@@ -1,5 +1,58 @@
 # Changelog
 
+## Unreleased — `phrased as`: dictations for foreign functions; blessed libraries 6 → 10; three emitter-drift extractions
+
+**`phrased as` — a dictation attached to an FFI binding.** Dictum's premise
+is that code reads like language, but anything reached through FFI was
+excluded from it: `call llama_eval with ctx and tokens giving r`. A binding
+can now carry its own sentence:
+
+```
+import from C++ the action llama_eval takes opaque pointer and opaque pointer
+    produces whole number as llama_eval
+    phrased as "evaluate {} on {}"
+```
+
+and every call site downstream reads `evaluate ctx on tokens giving r`.
+Works on `import from C` and `import from C++`. It lowers to an ordinary
+call, so it is backend-agnostic *by construction* and required no emitter
+changes — deliberately, so the feature cannot become a fourth drift surface.
+Verified identical on c/cpp/nim. Two guards, because a wrong phrase fails
+silently rather than loudly: placeholder count must equal the action's
+arity, and a phrase must begin with a literal word. R97.
+
+**Blessed libraries 6 → 10**: added `uuid`, `expat`, `pcre2`, `libm`, each
+verified by real compile+link+run on all three backends and recorded in the
+registry with provenance.
+
+**Three shared-semantics extractions against emitter drift** — the systemic
+cause of nearly every silent-wrong-answer bug in this project:
+
+- printf conversion (R94). emit_c and emit_cpp were only ~35% textually
+  similar here yet contained the *same* bug — a known integer falling
+  through to a heuristic that guessed from the variable NAME, so
+  `keep price as whole number` printed `price=0.000000`. Textual similarity
+  does not predict drift; semantic duplication does.
+- expression type inference (R95). Identical inference, different spelling
+  only. Breaking the shared rule did **not** fail the then-95-test suite —
+  no test exercised a comparison whose inferred type mattered — so R95 now
+  compares the two emitters directly on the same AST.
+- call-name resolution (R96). **Found a live bug**: emit_cpp was missing
+  both the reserved-name sanitize (so `action sqrt` compiled on c and nim
+  and *failed* on cpp) and the R18 FFI-alias guard. Those two rules pull in
+  opposite directions on the same identifier, which is exactly why one
+  implementation beats three.
+
+**`tools/dictum.py`** — one build command. Resolves link flags from the
+manifests (scanning shim sources too), compiles and links C shims, orders
+nim's `--passL` correctly, and attaches errors to their fix
+(`undefined reference to SDL_Init` → "comes from SDL2 — add --link SDL2").
+`dictum check` builds on all three backends and compares **output**, which
+is the highest-yield bug signal in the project and was previously only an
+internal tool.
+
+Suite: 93 → 98 regression, 6/6 behavioral.
+
 ## Unreleased — R39: proved the C++ backend's identical Attempt line-mapping fix, closing a same-fix-unverified-on-one-side gap
 
 The Attempt-block #line fix (previous entry) was applied identically to

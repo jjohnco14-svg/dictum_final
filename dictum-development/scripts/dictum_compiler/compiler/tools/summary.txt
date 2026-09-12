@@ -1,6 +1,6 @@
-elapsed_seconds:13
-total_runs:12
+elapsed_seconds:14
+total_runs:19
 findings_count:0
-c: crashes=0 internal=0 rejects=3 ok=9
-cpp: crashes=0 internal=0 rejects=3 ok=9
-nim: crashes=0 internal=0 rejects=2 ok=10
+c: crashes=0 internal=0 rejects=11 ok=8
+cpp: crashes=0 internal=0 rejects=11 ok=8
+nim: crashes=0 internal=0 rejects=11 ok=8

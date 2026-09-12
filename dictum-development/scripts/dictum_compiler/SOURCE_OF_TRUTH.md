@@ -1,7 +1,7 @@
 # Dictum — Source of Truth
 
 Canonical reference for where each fact about the Dictum language actually
-lives, and what has been verified true about the compiler as of v0.1.52.
+lives, and what has been verified true about the compiler as of v0.1.53.
 Written because the project's core recurring failure mode has been the
 same fact about the language living in more than one hand-maintained
 place with no sync mechanism — this document is meant to prevent a new
@@ -1687,3 +1687,183 @@ ever enough the whole procedure would be theatre.
   denied); results must be read from the notebook UI.
 
 Version at time of writing: **0.1.52**.
+
+---
+
+## 32. `phrased as`, and the first real attack on emitter drift (v0.1.53)
+
+### 32a. `phrased as` — a dictation for a foreign function
+
+**The gap.** Dictum exists so code reads like language. But everything
+reached through FFI was excluded from that premise and stayed foreign glue:
+
+```
+call llama_eval with ctx and tokens giving r
+```
+
+A binding can now carry its own dictation:
+
+```
+import from C++ the action llama_eval takes opaque pointer and opaque pointer
+    produces whole number as llama_eval
+    phrased as "evaluate {} on {}"
+```
+
+and every call site downstream reads as Dictum:
+
+```
+evaluate ctx on tokens giving r
+```
+
+Working examples, all verified on c/cpp/nim:
+
+| phrase | result |
+|--------|--------|
+| `the database version giving v` | `ver=3.45.1` |
+| `the magnitude of 0 minus 42 giving m` | `abs=42` |
+| `the compression library version giving z` | `zlib=1.3` |
+
+**Design note worth keeping.** A phrased call lowers to an ordinary
+`FuncCall` in the parser. That was chosen deliberately: it means the feature
+is backend-agnostic *by construction* and needed **zero** emitter changes,
+so it cannot become a fourth place for the three backends to drift apart.
+Given that drift is this project's dominant bug source (§32b), any new
+surface that avoids touching all three emitters is worth preferring.
+
+**Two guards**, because a bad phrase fails *silently* rather than loudly:
+
+- placeholder count must equal the action's arity — otherwise a call site
+  passes the wrong number of arguments and the compiler cannot tell
+- a phrase must begin with a literal word, not a placeholder — the first
+  word is what makes it recognisable at a call site at all
+
+Phrase matching runs first in statement dispatch (it is an explicit, opt-in
+binding the author wrote) and backtracks cleanly when it does not match.
+Works for `import from C` and `import from C++`. (R97.)
+
+### 32b. Emitter drift: measured, then attacked
+
+`emit_c.py`, `emit_cpp.py` and `emit_nim.py` are three separately
+hand-written emitters, and nearly every *silent-wrong-answer* bug in this
+project has been drift between them. A full shared IR is a rewrite; this
+pass took the scoped route of extracting genuinely backend-independent
+semantics into `dictumc/type_semantics.py`.
+
+**The measurement changed the approach.** 14 method names exist in both
+`emit_c` and `emit_cpp`. The most *textually similar* were mostly harmless
+boilerplate. Meanwhile `_format_spec` is only **~35% textually similar** —
+and it is the one that contained the **same bug in both**.
+
+> So textual similarity does **not** predict drift. **Semantic duplication
+> does**: both were answering the same question with separately maintained
+> code.
+
+Three extractions, in order of what each proved:
+
+**1. printf conversion (R94).** Both emitters let a *known* integer type
+fall through to a heuristic that guessed from the variable **NAME**, so
+`keep price as whole number with value 100` printed `price=0.000000`.
+`price`, `rate`, `distance` are about as ordinary as names get. The shared
+table now returns `None` for genuinely unknown types instead of guessing —
+a name guess is a last resort for an unknown type, never an override of a
+known one. *Proven shared:* one edit to the table made both backends wrong.
+
+**2. Expression type inference (R95).** Both performed identical inference
+(literal kind → identifier lookup → comparison yields boolean → otherwise
+left-or-right → call yields declared return type); only the **spelling**
+differed (`dictum_text` vs `const char*`). Inference is not cosmetic — it
+drives the printf conversion, the declaration and any cast, so divergence
+appears as a wrong answer, not a compile error.
+
+> **This extraction exposed a coverage gap worth remembering.** Breaking the
+> shared comparison rule did **not** fail the then-95-test suite: no test
+> exercised a comparison whose *inferred type* mattered. A refactor that
+> silently passes its own suite is not verified, it is unobserved. R95 now
+> compares the two emitters **directly on the same AST**.
+
+**3. Call-name resolution (R96) — this one found a live bug.** `emit_cpp`
+was missing *both* fixes `emit_c` had:
+
+- `_sanitize_action_name` — an action named after a C-reserved function must
+  be renamed. **`action sqrt` compiled on c and nim and failed to compile on
+  cpp.** A live bug, sitting unnoticed.
+- the R18 FFI-alias guard — a deliberate `import from C ... as sqrt` must
+  **not** be renamed, since its extern was emitted under that exact name.
+
+Those two rules pull in **opposite directions on the same identifier**.
+Getting that interaction right once is materially easier than getting it
+right in three places — and the evidence is that it *wasn't* right in three
+places.
+
+**Current state of the drift surface:**
+
+| Shared (one implementation) | Still emitted three times |
+|---|---|
+| printf conversion | statement emission |
+| expression type inference | control flow |
+| call-name resolution | declarations |
+
+Each extraction so far has either found a latent bug or proven one cannot
+recur. The remaining surfaces are larger.
+
+### 32c. Blessed libraries: 6 → 10
+
+Added `uuid`, `expat`, `pcre2`, `libm` — each drafted as a manifest and then
+**verified by real compile+link+run on all three backends**, with verdicts
+recorded in `import_c_registry` with provenance (actual compiler version,
+timestamp, observed output).
+
+Full set now verified on c+cpp+nim: `sqlite3`, `openssl`, `sdl2`, `glfw`,
+`raylib`, `zlib`, `uuid`, `expat`, `pcre2`, `m`.
+
+### 32d. `tools/dictum.py` — one command to build and check
+
+Shipping a program used to require knowing `dictumc_cli.py` vs
+`project_builder.py`, `make` vs `build.sh`, `--link` flags that
+`import from C` does not carry, hand-editing `OBJS` to attach a C shim, and
+`--passL` **ordering** for nim. Most of the needed information already
+existed in the tree — the manifests record each library's link flags — it
+was simply never wired to the build.
+
+- **`dictum build`** — picks single-file vs project, runs the right build
+  per backend, compiles and links shims, orders nim's flags, and resolves
+  link flags from the manifests. Link inference also scans **shim sources**:
+  a shim wraps an awkward C API, so the `.dict` names only the wrapper and
+  scanning `.dict` alone misses the library the shim actually needs.
+- **`dictum check`** — builds on all three backends and compares **output**.
+  This is the highest-yield bug signal in the project and had only ever been
+  an internal tool. It catches a C++ shadowing bug that a 94-test suite, a
+  saturated combinatorial explorer, **and** a full feature×context matrix
+  all passed.
+- **`dictum libs`** — what is blessed, on which targets. An unlisted target
+  reads as **UNVERIFIED**, deliberately distinct from broken.
+
+Errors now carry their fix where mechanically derivable:
+`undefined reference to SDL_Init` → *"'SDL_Init' comes from SDL2 — add
+`--link SDL2`"*.
+
+### 32e. New tooling from this pass
+
+| Tool | Purpose |
+|------|---------|
+| `tools/dictum.py` | one build/check command (32d) |
+| `tools/edges.py` | every FEATURE × every CONTEXT — bugs live where an ordinary feature meets a context it has never been placed in |
+| `tools/explorer.py` | coverage-guided pairwise/triple generation with persistent state; greedy packing made it ~35× faster per unit of coverage |
+| `tools/backend_parity.py` | structural: a node type handled by one emitter and not another is a gap by construction |
+
+### 32f. Honest notes
+
+- **Tool-first suspicion keeps paying.** `edges.py` reported 79 "edges" on
+  its first run; most were the *tool's* own scoping mistakes (declaring
+  inside a loop body, printing outside), so the compiler's correct rejection
+  was being reported as a compiler bug. After fixing the tool: 79 → 17 → 0.
+  This happened three separate times this pass. Verify before believing.
+- **Generators verify the space you defined; real programs find its edges.**
+  Six hand-written programs were built as an acceptance test: five were
+  correct first try on all three backends, and the sixth found the C++
+  `attempt`-shadowing bug that everything else passed.
+- Still open: the 8 reserved stdlib families (`LLM.*`, `Robot.*`,
+  `Speech.*`); the Nim stdlib bridge covers 40 of 92 functions; no
+  autonomous spec→verified-code loop.
+
+Version at time of writing: **0.1.53**.
