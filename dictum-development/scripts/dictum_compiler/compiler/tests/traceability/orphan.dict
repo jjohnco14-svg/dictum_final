@@ -1,0 +1,6 @@
+module orphan
+    # implements: R_DOES_NOT_EXIST
+    action orphaned takes n as whole number produces whole number
+        return n
+    end action
+end module

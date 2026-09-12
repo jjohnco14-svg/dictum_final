@@ -1,0 +1,21 @@
+module mathutil
+
+    # implements: R1
+    action square takes n as whole number produces whole number
+        keep r as whole number with value 0
+        put n times n into r
+        return r
+    end action
+
+    # implements: R2
+    action clamp takes v as whole number and lo as whole number and hi as whole number produces whole number
+        keep out as whole number with value 0
+        put v into out
+        return out
+    end action
+
+    action helper_no_tag takes n as whole number produces whole number
+        return n
+    end action
+
+end module

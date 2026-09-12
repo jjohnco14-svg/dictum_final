@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 run_pipeline.py — the "final boss" one-call entry point spanning Guide B,
-Guide C, and the Guide A coverage check, in that order, for one project.
+Guide C, the Guide A coverage check (requirement <-> test), and the Guide A
+traceability check (requirement <-> code), in that order, for one project.
 
 Why the order matters and is fixed, not configurable: verifying *target*
 behavior (Guide C) on a project that doesn't even compile/link cleanly
@@ -63,6 +64,7 @@ def run(project_dir: str, manifest_path: Optional[str], source_of_truth: Optiona
     if not guide_b_ok:
         report["guide_c"] = None
         report["coverage"] = None
+        report["traceability"] = None
         report["overall_ok"] = False
         report["stopped_at"] = "guide_b"
         report["stop_reason"] = ("Guide B found a real problem (a genuine .dict mistake, a "
@@ -103,8 +105,22 @@ def run(project_dir: str, manifest_path: Optional[str], source_of_truth: Optiona
         report["coverage"] = None
         report["coverage_ok"] = None
 
+    # ---- Stage 4: traceability check (requirement <-> CODE, independent of
+    # Stage 3's requirement <-> TEST check and of whether Guide C passed --
+    # "is the right thing checked" and "does the requirement even have
+    # implementing code" are separate questions, both worth knowing
+    # regardless of current pass/fail state; see HANDOFF.md §9.5) ----
+    if source_of_truth:
+        import guide_a_traceability_check
+        traceability = guide_a_traceability_check.check(project_dir, source_of_truth, manifest_path)
+        report["traceability"] = traceability
+        report["traceability_ok"] = traceability["ok"]
+    else:
+        report["traceability"] = None
+        report["traceability_ok"] = None
+
     report["overall_ok"] = guide_b_ok and (report["guide_c_ok"] is not False) and (
-        report["coverage_ok"] is not False)
+        report["coverage_ok"] is not False) and (report["traceability_ok"] is not False)
     report["stopped_at"] = None
     return report
 
@@ -147,6 +163,20 @@ def print_human(report: Dict[str, Any]) -> None:
             print(f"       UNCOVERED: {rid}")
     else:
         print("[SKIPPED] Guide A coverage check -- no --source-of-truth given, or no --manifest")
+
+    if report["traceability"] is not None:
+        t = report["traceability"]
+        tag = "PASS" if report["traceability_ok"] else "FAIL"
+        n_impl = len(t["roadmap_ids"]) - len(t["unimplemented"])
+        print(f"[{tag}] Guide A traceability check -- "
+              f"{n_impl}/{len(t['roadmap_ids'])} roadmap IDs have traceable implementing code")
+        for rid in t["unimplemented"]:
+            print(f"       UNIMPLEMENTED: {rid} -- no `# implements: {rid}` tag found on any construct")
+        for o in t["orphan_tags"]:
+            print(f"       ORPHAN TAG: {o['file']}:{o['line']} ({o['kind']} {o['name']}) "
+                  f"tagged '{o['tagged_id']}' -- not a real roadmap ID (rename/typo?)")
+    else:
+        print("[SKIPPED] Guide A traceability check -- no --source-of-truth given")
 
     print()
     print("OVERALL: " + ("OK" if report["overall_ok"] else "NEEDS ATTENTION -- see FAIL lines above"))

@@ -2123,6 +2123,7 @@ def test_r33_run_pipeline(tmp):
     clean_dir = os.path.join(tmp, "clean_proj")
     os.makedirs(clean_dir, exist_ok=True)
     open(os.path.join(clean_dir, "main.dict"), "w").write(
+        '# implements: R1\n'
         'program main\n    print the text "hi"\nend program\n'
     )
     open(os.path.join(clean_dir, "expected.txt"), "w").write("hi")
@@ -2147,6 +2148,8 @@ def test_r33_run_pipeline(tmp):
     rep = _json.loads(r.stdout)
     if not rep["overall_ok"] or not rep["guide_b_ok"] or not rep["guide_c_ok"] or not rep["coverage_ok"]:
         return False, f"expected all three stages OK: {rep}"
+    if not rep["traceability_ok"]:
+        return False, f"expected traceability stage OK (R1 tagged on main.dict): {rep['traceability']}"
 
     # -- broken project: must stop at Guide B, never attempt Guide C/coverage --
     broken_dir = os.path.join(tmp, "broken_proj")
@@ -2162,8 +2165,8 @@ def test_r33_run_pipeline(tmp):
     rep2 = _json.loads(r2.stdout)
     if rep2["guide_b_ok"] is not False or rep2["stopped_at"] != "guide_b":
         return False, f"expected guide_b_ok=false, stopped_at='guide_b', got {rep2}"
-    if rep2["guide_c"] is not None or rep2["coverage"] is not None:
-        return False, "Guide C / coverage must never be attempted after a Guide B failure"
+    if rep2["guide_c"] is not None or rep2["coverage"] is not None or rep2["traceability"] is not None:
+        return False, "Guide C / coverage / traceability must never be attempted after a Guide B failure"
     return True, "ok"
 
 
@@ -5694,6 +5697,81 @@ def test_r99_vocabulary_artefact(tmp):
                    f"{data['stdlib']['count']} stdlib entries, "
                    f"{data['blessed_libraries']['count']} blessed libraries, "
                    f"all live-cross-checked against the real registries")
+
+
+@regression("R100 verify/guide_a_traceability_check.py: the requirement<->CODE "
+            "half of traceability that guide_a_coverage_check.py (requirement"
+            "<->TEST) never covered (HANDOFF.md §9.5 -- 'show me the code "
+            "implementing requirement 3' had no answer before this). Scans "
+            "`# implements: Rn` comments above .dict program/action/module "
+            "declarations -- a convention that needed zero grammar changes, "
+            "since `#` line comments already exist. Verifies against a real "
+            "fixture (tests/traceability/) with three real cases at once: a "
+            "tagged, implemented requirement; a requirement with NO code "
+            "(must be reported UNIMPLEMENTED, not silently skipped); and a "
+            "construct tagged with an ID that doesn't exist in the roadmap "
+            "markdown (must be reported as an orphan tag, catching the exact "
+            "rename/typo drift this whole mechanism exists to prevent)")
+def test_r100_traceability_check(tmp):
+    script = os.path.join(HERE, "verify", "guide_a_traceability_check.py")
+    if not os.path.exists(script):
+        return False, "verify/guide_a_traceability_check.py missing"
+    fixture = os.path.join(HERE, "tests", "traceability")
+    if not os.path.isdir(fixture):
+        return None, "SKIP: tests/traceability fixture not present"
+
+    sot = os.path.join(fixture, "SOURCE_OF_TRUTH_demo.md")
+    r = subprocess.run([sys.executable, script, "--project", fixture,
+                        "--source-of-truth", sot, "--json"],
+                        capture_output=True, text=True, timeout=60, cwd=HERE)
+    # The fixture deliberately contains an unimplemented roadmap ID (R3)
+    # and an orphan tag (orphan.dict), so a CORRECT run must exit 1 -- an
+    # exit 0 here would mean the checker silently stopped catching either
+    # case, which is the exact failure mode this test exists to prevent.
+    if r.returncode == 0:
+        return False, ("checker exited 0 on a fixture with a deliberate "
+                        "UNIMPLEMENTED id and a deliberate orphan tag -- it "
+                        "stopped detecting one or both")
+    try:
+        data = json.loads(r.stdout)
+    except Exception as e:
+        return False, f"--json stdout is not valid JSON: {e}: {r.stdout[:200]!r}"
+
+    if "R3" not in data.get("unimplemented", []):
+        return False, f"R3 (deliberately unimplemented) not reported: {data.get('unimplemented')}"
+    if data["trace_table"].get("R1", {}).get("implemented_by") == []:
+        return False, "R1 (tagged 'implements: R1' on mathutil.dict's square action) not traced to code"
+    r1_files = {e["file"] for e in data["trace_table"]["R1"]["implemented_by"]}
+    if "mathutil.dict" not in r1_files:
+        return False, f"R1 traced to the wrong file(s): {r1_files}"
+    orphan_ids = {o["tagged_id"] for o in data.get("orphan_tags", [])}
+    if "R_DOES_NOT_EXIST" not in orphan_ids:
+        return False, f"orphan.dict's bogus tag not caught: {data.get('orphan_tags')}"
+
+    # Now prove the POSITIVE path: strip the deliberate breakage down to
+    # just the clean cases and confirm it reports OK, so this isn't a
+    # checker that can only ever say NEEDS ATTENTION.
+    clean_dir = os.path.join(tmp, "clean")
+    os.makedirs(clean_dir)
+    import shutil as _sh
+    _sh.copy(sot, os.path.join(clean_dir, "SOURCE_OF_TRUTH_demo.md"))
+    _sh.copy(os.path.join(fixture, "mathutil.dict"), os.path.join(clean_dir, "mathutil.dict"))
+    clean_sot = os.path.join(clean_dir, "SOURCE_OF_TRUTH_demo.md")
+    # Rewrite the roadmap to drop R3 (the deliberately-unimplemented one)
+    # so the clean fixture has no unimplemented id and no orphan tag.
+    text = open(clean_sot).read().split("- [R3]")[0]
+    open(clean_sot, "w").write(text)
+    r2 = subprocess.run([sys.executable, script, "--project", clean_dir,
+                         "--source-of-truth", clean_sot, "--json"],
+                        capture_output=True, text=True, timeout=60, cwd=HERE)
+    if r2.returncode != 0:
+        return False, (f"checker still reports NEEDS ATTENTION on a fixture "
+                        f"with no unimplemented ids and no orphan tags: "
+                        f"{r2.stdout[-300:]}")
+
+    return True, ("ok -- UNIMPLEMENTED and orphan-tag detection both proven "
+                   "on the real fixture; clean fixture (same code, no "
+                   "deliberate breakage) correctly reports OK")
 
 
 if __name__ == "__main__":
