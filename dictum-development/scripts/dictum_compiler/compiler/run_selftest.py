@@ -6064,6 +6064,51 @@ def test_r104_license_report(tmp):
     return True, "ok -- no-library/permissive/static-copyleft/unknown all correctly distinguished"
 
 
+@regression("R105 generic actions (`takes X as any T ... produces T`, C++ "
+            "templates) -- registered in the grammar/parser/emitter but "
+            "with ZERO existing usage anywhere in the codebase and ZERO "
+            "Guide A documentation before this (HANDOFF.md §5.4: 'C++ "
+            "classes, methods, templates: UNTESTED'). Unlike the C++ class "
+            "path (R101), this one had NO bugs waiting -- confirmed by "
+            "actually compiling and running the same generic `max_of` "
+            "action across 4 real instantiations (two different whole "
+            "number calls, a fractional number call, and a TEXT/string "
+            "call -- lexicographic comparison, not just numeric), then "
+            "confirming the C and Nim backends both correctly and clearly "
+            "refuse it ('Templates require --backend cpp') rather than "
+            "silently mis-compiling. Recorded as a real, positive result, "
+            "not manufactured evidence of a bug that isn't there")
+def test_r105_generic_actions(tmp):
+    src = os.path.join(HERE, "tests", "generics", "max_of.dict")
+    if not os.path.exists(src):
+        return False, "tests/generics/max_of.dict missing"
+
+    out_bin = os.path.join(tmp, "max_of_cpp")
+    r = subprocess.run([sys.executable, CLI, src, "--backend", "cpp",
+                        "--compile", "--output", out_bin],
+                        capture_output=True, text=True, timeout=120, cwd=HERE)
+    if r.returncode != 0:
+        return False, f"cpp build failed: {(r.stdout + r.stderr)[-400:]}"
+    run = _run(out_bin, timeout=20)
+    out = "".join(run.stdout.split())
+    expected = "int:7float:1.500000text:bananaint2:100"
+    if out != expected:
+        return False, f"unexpected output: {out!r} (expected {expected!r})"
+
+    for backend in ("c", "nim"):
+        rb = subprocess.run([sys.executable, CLI, src, "--backend", backend,
+                             "--compile", "--output", os.path.join(tmp, f"max_of_{backend}")],
+                             capture_output=True, text=True, timeout=60, cwd=HERE)
+        if rb.returncode == 0:
+            return False, (f"[{backend}] a template action was NOT rejected -- "
+                            f"templates are meant to be cpp-only")
+        if "template" not in (rb.stdout + rb.stderr).lower():
+            return False, (f"[{backend}] rejected the build, but not with a clear "
+                            f"template-related message: {(rb.stdout + rb.stderr)[-200:]}")
+
+    return True, f"ok -- 4 real instantiations (2 int, 1 float, 1 text) correct: {out!r}"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

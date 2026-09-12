@@ -1018,6 +1018,55 @@ in `compiler/run_selftest.py`.
   non-natural-language-reading part of an otherwise natural-language
   program.
 
+### 13b. Generic actions — `takes X as any T` (C++ templates) [VERIFIED]
+
+An action parameter typed `any NAME` (`NAME` can be any word — it's a
+type-variable name, not a keyword) makes the whole action a real C++
+template, generic over that type:
+
+```
+action max_of takes a as any T and b as any T produces T
+    if a is greater than b then
+        return a
+    end if
+    return b
+end action
+
+program main
+    keep i as whole number with value 0
+    call max_of with 3 and 7 giving i
+    print the text "int:" and i
+
+    keep f as fractional number with value 0.0
+    call max_of with 1.5 and 0.5 giving f
+    print the text "float:" and f
+
+    keep s as text with value ""
+    call max_of with "apple" and "banana" giving s
+    print the text "text:" and s
+end program
+```
+Compiled and run for real across four instantiations (two different
+`whole number` calls, one `fractional number` call, and one `text`
+call — confirming this exercises real C++ operator overloading /
+lexicographic string comparison via `>`, not just numeric types) — R105
+in `compiler/run_selftest.py`, fixture at `compiler/tests/generics/`.
+
+- **Two (or more) parameters sharing the same `any NAME`** — `a as any
+  T and b as any T` — are constrained to the SAME type at each call
+  site; the compiler doesn't check this for you at the Dictum level,
+  it falls out of them both becoming the same C++ template parameter
+  `T`, so a call site mixing types for `a`/`b` fails at the underlying
+  `g++` type-deduction step, not with a Dictum-level error message.
+- **C++ backend only, and clearly refused elsewhere** — confirmed by
+  actually trying it: both `--backend c` and `--backend nim` refuse a
+  template action outright with `Templates require --backend cpp`,
+  rather than silently mis-compiling or ignoring the constraint.
+- This is a different mechanism from §11j's `growable list of ANY
+  element type` (a built-in CONTAINER being generic) and from §11h's
+  higher-order actions (passing an action BY NAME as a value) — this is
+  a user-written ACTION becoming a real template.
+
 ---
 
 ## 14. FFI — calling C++: `import from C++` [TRACED, not compiled in this session]

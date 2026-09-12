@@ -1,0 +1,24 @@
+action max_of takes a as any T and b as any T produces T
+    if a is greater than b then
+        return a
+    end if
+    return b
+end action
+
+program main
+    keep i as whole number with value 0
+    call max_of with 3 and 7 giving i
+    print the text "int:" and i
+
+    keep f as fractional number with value 0.0
+    call max_of with 1.5 and 0.5 giving f
+    print the text "float:" and f
+
+    keep s as text with value ""
+    call max_of with "apple" and "banana" giving s
+    print the text "text:" and s
+
+    keep i2 as whole number with value 0
+    call max_of with 100 and 50 giving i2
+    print the text "int2:" and i2
+end program
