@@ -1851,7 +1851,60 @@ Errors now carry their fix where mechanically derivable:
 | `tools/explorer.py` | coverage-guided pairwise/triple generation with persistent state; greedy packing made it ~35× faster per unit of coverage |
 | `tools/backend_parity.py` | structural: a node type handled by one emitter and not another is a gap by construction |
 
-### 32f. Honest notes
+### 32f. How far `import from C/C++` actually reaches (tested, not assumed)
+
+Prompted by a fair challenge — *"isn't this more than CLI?"* — the limits
+were **tested rather than asserted**. It is considerably more than CLI, and
+one real bug was found in the process.
+
+**Verified working, by running it:**
+
+| Capability | Evidence |
+|---|---|
+| GUI windows, input | raylib click-counter, verified by screenshot at real pixel coords |
+| Windowing / media | sdl2 blessed and verified on all 3 backends |
+| Local persistence | sqlite3 app, DB contents verified externally with Python |
+| Regex / XML / compression / crypto | pcre2, expat, zlib, openssl — all blessed |
+| Unblessed libraries | libuuid via raw `import from C`, real v4 UUIDs |
+| **C callbacks INTO Dictum** | a Dictum action invoked by a third-party C library (R98) |
+
+**Callbacks are the deciding capability.** Whether `import from C` is a
+*general interop mechanism* or merely *a way to call simple leaf functions*
+comes down to whether a C library can call back into your code. Callbacks
+are everywhere in real C: `qsort`, event loops, parser handlers, llama.cpp
+samplers.
+
+C worked. **C++ segfaulted**, ABI-level: an action-typed FFI parameter was
+spelled `std::function<int(int,int)>` — a C++ *object*, not a function
+pointer, and ABI-incompatible with a C callee expecting `int(*)(int,int)`.
+
+> Note the scoping: `std::function` is **correct** for Dictum-*internal*
+> higher-order actions. Only the `extern "C"` path needs the raw pointer
+> spelling. A blanket change would have been wrong.
+
+Three sites needed it — extern declaration, generated wrapper, and the
+**call-site cast** — which is why it was subtly rather than obviously wrong.
+(R98.)
+
+**Real remaining limits, precisely known rather than guessed:**
+
+- **libc-header collisions.** Binding `qsort`/`abs`/`puts` *directly*
+  conflicts with the system declaration (`size_t` vs `whole number`,
+  `const void*` vs `opaque pointer`). A third-party library with the same
+  shape is fine — the collision is specifically with headers the generated
+  file already includes.
+- **Struct-by-value** requires a `shape` mirroring the exact layout.
+  `scripts/generate_import_c.py` emits these correctly from a real header
+  via libclang.
+- **C++ classes, methods, templates — UNTESTED.** Everything verified so far
+  is C-ABI. This is the open question for consuming a C++ API directly
+  rather than its C wrapper.
+- **`phrased as` ambiguity.** A template whose literal words also occur
+  inside an argument expression can misparse: `"reduce {} of {}"` against
+  `the address of xs`. Not fixed; choose phrase words that will not appear
+  in arguments.
+
+### 32g. Honest notes
 
 - **Tool-first suspicion keeps paying.** `edges.py` reported 79 "edges" on
   its first run; most were the *tool's* own scoping mistakes (declaring
@@ -1864,6 +1917,7 @@ Errors now carry their fix where mechanically derivable:
   `attempt`-shadowing bug that everything else passed.
 - Still open: the 8 reserved stdlib families (`LLM.*`, `Robot.*`,
   `Speech.*`); the Nim stdlib bridge covers 40 of 92 functions; no
-  autonomous spec→verified-code loop.
+  autonomous spec→verified-code loop; **C++ classes/methods/templates are
+  untested** (everything verified is C-ABI — see §32f).
 
 Version at time of writing: **0.1.53**.

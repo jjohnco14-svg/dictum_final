@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased — R98: C callbacks from Dictum now work; the C++ path was ABI-broken
+
+Prompted by a fair challenge — "isn't `import_c` more than CLI?" — the real
+limits were **tested rather than asserted**. CALLBACKS are what decide
+whether `import from C` is general interop or only a way to call simple leaf
+functions, and they are everywhere in real C APIs: `qsort`, event loops,
+parsers, llama.cpp samplers.
+
+C worked. **C++ segfaulted**, and the cause was ABI-level: an action-typed
+FFI parameter was spelled `std::function<int(int,int)>` — a C++ *object*,
+not a function pointer. Passing it where a C callee expects
+`int(*)(int,int)` is ABI-incompatible. `std::function` remains correct for
+Dictum-*internal* higher-order actions, so the fix is scoped to the
+`extern "C"` path only.
+
+Three sites needed it, which is why it was subtly rather than obviously
+wrong: the extern declaration, the generated wrapper, and the **call-site
+cast**. A function-pointer type also puts the parameter name *inside* the
+parens, which does not fit a "render type, then name" emitter — solved with
+a generated typedef, the same way `emit_c.py` already did.
+
+Verified end to end: a Dictum action passed into a real third-party C
+library and invoked from C code, returning `max=9` on both backends.
+R98 proven to catch the regression, with a failure message that names the
+actual cause rather than just reporting a link error.
+
+Also recorded (not fixed): a `phrased as` template whose literal words also
+appear inside an argument expression can be ambiguous — `"reduce {} of {}"`
+vs `the address of xs`. Worth knowing when choosing phrases.
+
+Suite: 99/99 regression, 6/6 behavioral.
+
 ## Unreleased — `phrased as`: dictations for foreign functions; blessed libraries 6 → 10; three emitter-drift extractions
 
 **`phrased as` — a dictation attached to an FFI binding.** Dictum's premise
