@@ -1,0 +1,34 @@
+shape Base holds
+    public
+        label as text
+end shape
+
+shape Widget extends Base holds
+    private
+        id as whole number
+    public
+        constructor takes wid as whole number and lbl as text produces nothing
+            set id to wid
+            set label to lbl
+        end constructor
+
+        method describe takes nothing produces nothing
+            print the text "label=" and label and "id=" and id
+        end method
+
+        method get_id takes nothing produces whole number
+            return id
+        end method
+
+        destructor produces nothing
+            print the text "cleanup"
+        end destructor
+end shape
+
+program main
+    keep w as Widget with value new Widget with 3 and "hello"
+    call describe of w
+    keep out as whole number with value 0
+    call get_id of w giving out
+    print the text "id=" and out
+end program

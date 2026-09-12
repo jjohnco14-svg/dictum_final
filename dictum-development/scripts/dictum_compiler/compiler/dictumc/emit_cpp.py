@@ -59,6 +59,7 @@ class CppEmitter:
         self._includes_emitted: bool = False
         self.namespace: str = ""
         self.shapes: Dict[str, Any] = {}
+        self.class_parents: Dict[str, Optional[str]] = {}
         self.actions: Set[str] = set()
         self.imported_containers: Dict[str, str] = {}
         self.imported_actions: Dict[str, Tuple] = {}
@@ -1049,6 +1050,41 @@ class CppEmitter:
                 self.emit("public:")
                 for fname, ftype in node.fields:
                     self.emit(f"{self.type_to_cpp(ftype)} {fname};")
+
+                # BUGFIX (C++ class methods/constructors/destructors were
+                # completely untested before this -- see HANDOFF.md §5.4 --
+                # and the FIRST real program written against this path hit
+                # a silent-wrong-answer bug): `self.declared_vars` (used by
+                # the Assignment auto-declare heuristic below, and by other
+                # emission logic like list/array-type checks) never knew
+                # about a class's own fields, since fields are tracked
+                # separately in `self.shapes`. A body statement like
+                # `set id to wid` inside a constructor therefore always hit
+                # the "base_name not in declared_vars" branch and emitted
+                # `int32_t id = wid;` -- a FRESH LOCAL SHADOWING the real
+                # member -- instead of `id = wid;`, the real assignment.
+                # The constructor compiled cleanly and the object's field
+                # was silently left uninitialized/zero. Confirmed via a
+                # real Widget(int) constructor: printed `id=0` instead of
+                # the constructed `id=7`. Fix: seed declared_vars with this
+                # class's own fields AND every ancestor's fields (walking
+                # `node.parent` through the already-emitted `self.shapes`,
+                # since a subclass's method can just as validly reference
+                # an inherited field) for the duration of this class's
+                # body emission, then restore the outer scope's
+                # declared_vars afterward so nothing leaks either way.
+                saved_declared_vars = dict(self.declared_vars)
+                cls_name = node.parent
+                seen_ancestors = set()
+                while cls_name and cls_name in self.shapes and cls_name not in seen_ancestors:
+                    seen_ancestors.add(cls_name)
+                    for fname, ftype in self.shapes[cls_name].items():
+                        self.declared_vars.setdefault(fname, ftype)
+                    cls_name = self.class_parents.get(cls_name)
+                for fname, ftype in node.fields:
+                    self.declared_vars[fname] = ftype
+                self.class_parents[node.name] = node.parent
+
                 if not any(len(c.params) == 0 for c in node.constructors):
                     self.emit(f"{node.name}() = default;")
                 for ctor in node.constructors:
@@ -1077,6 +1113,7 @@ class CppEmitter:
                         self._emit_marked(stmt)
                     self.indent -= 1
                     self.emit("}")
+                self.declared_vars = saved_declared_vars
                 self.indent -= 1
                 self.emit("};")
             else:

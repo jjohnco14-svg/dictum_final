@@ -54,6 +54,7 @@ class ShapeDef:
     name: str
     fields: Dict[str, str]
     line: int = 0
+    parent: Optional[str] = None
 
 
 class Scope:
@@ -215,7 +216,8 @@ class Validator:
         for node in nodes:
             if isinstance(node, Shape):
                 fields = {fname: ftype for fname, ftype in node.fields}
-                self.shapes[node.name] = ShapeDef(name=node.name, fields=fields, line=node.line)
+                self.shapes[node.name] = ShapeDef(name=node.name, fields=fields, line=node.line,
+                                                   parent=node.parent)
                 if self.cpp_mode and (node.methods or node.constructors or node.destructor or node.parent):
                     self.classes[node.name] = node
             elif isinstance(node, Action):
@@ -617,10 +619,29 @@ class Validator:
         self.PRIMITIVE_TYPES = old
         self.check_scope_ownership(body_scope, f"action '{node.name}' exit")
 
+    def _all_fields_including_inherited(self, class_name: str) -> Dict[str, str]:
+        """A class's own fields plus every ancestor's, walking `parent`
+        through self.shapes. A subclass's method/constructor validly
+        references an inherited field (e.g. `set label to lbl` for a
+        `label` field declared on a parent shape) -- this used to be
+        rejected as 'Use of undeclared variable' because only the
+        CURRENT class's own fields were ever registered into the
+        method/constructor/destructor body scope, never the parent's."""
+        fields: Dict[str, str] = {}
+        seen: Set[str] = set()
+        name = class_name
+        while name and name in self.shapes and name not in seen:
+            seen.add(name)
+            shape = self.shapes[name]
+            for fname, ftype in shape.fields.items():
+                fields.setdefault(fname, ftype)
+            name = shape.parent
+        return fields
+
     def validate_method(self, node: Method, scope: Scope) -> None:
         body_scope = Scope(parent=scope)
         if self.current_class and self.current_class in self.shapes:
-            for fname, ftype in self.shapes[self.current_class].fields.items():
+            for fname, ftype in self._all_fields_including_inherited(self.current_class).items():
                 body_scope.declare(VarInfo(name=fname, type=ftype, initialized=True, line=node.line))
         for pname, ptype in node.params:
             body_scope.declare(VarInfo(name=pname, type=ptype, initialized=True, line=node.line))
@@ -630,7 +651,7 @@ class Validator:
     def validate_constructor(self, node: Constructor, scope: Scope) -> None:
         body_scope = Scope(parent=scope)
         if self.current_class and self.current_class in self.shapes:
-            for fname, ftype in self.shapes[self.current_class].fields.items():
+            for fname, ftype in self._all_fields_including_inherited(self.current_class).items():
                 body_scope.declare(VarInfo(name=fname, type=ftype, initialized=True, line=node.line))
         for pname, ptype in node.params:
             body_scope.declare(VarInfo(name=pname, type=ptype, initialized=True, line=node.line))
@@ -640,7 +661,7 @@ class Validator:
     def validate_destructor(self, node: Destructor, scope: Scope) -> None:
         body_scope = Scope(parent=scope)
         if self.current_class and self.current_class in self.shapes:
-            for fname, ftype in self.shapes[self.current_class].fields.items():
+            for fname, ftype in self._all_fields_including_inherited(self.current_class).items():
                 body_scope.declare(VarInfo(name=fname, type=ftype, initialized=True, line=node.line))
         for stmt in node.body:
             self.validate_statement(stmt, body_scope)

@@ -511,31 +511,69 @@ print the text "x:" and x of p and "y:" and y of p
 
 ---
 
-## 11a. Shapes with methods, constructors, destructors, access control (C++ backend) [TRACED]
+## 11a. Shapes with methods, constructors, destructors, access control (C++ backend) [VERIFIED]
 
-`grammar.py`/`parser.py` recognize a fuller class-like form inside `shape
-... holds` on the C++ backend. Confirmed by reading `parser.py`'s
-`parse_shape`/`parse_method`/`parse_constructor`/`parse_destructor`, not
-independently compiled here:
+Compiled and run for real, including inheritance (`extends`), a
+constructor assigning both an own field and an inherited one, a method
+reading both, and a destructor — R101 in `compiler/run_selftest.py`,
+fixture at `compiler/tests/classes/widget.dict`. **This uncovered and
+fixed two real silent-wrong-answer bugs the first time anyone wrote a
+program against this path** (this section used to say `[TRACED]` for
+exactly that reason — nothing here had ever actually been compiled): a
+constructor's `set FIELD to VALUE` was silently declaring a fresh local
+that shadowed the real member instead of assigning it (the object's
+field stayed uninitialized), and a subclass method referencing an
+inherited field was rejected outright. Both are fixed now; see R101's
+regression-test description for the full story if you hit anything
+that looks similar.
 
 ```
+shape Base holds
+    public
+        label as text
+end shape
+
 shape Widget extends Base holds
     private
         id as whole number
     public
-        constructor takes id as whole number produces nothing
-            set id of this to id
+        constructor takes wid as whole number and lbl as text produces nothing
+            set id to wid
+            set label to lbl
         end constructor
 
-        method greet takes nothing produces nothing
-            print the text "hi"
+        method describe takes nothing produces nothing
+            print the text "label=" and label and "id=" and id
         end method
-
-        destructor produces nothing
-            print the text "cleanup"
-        end destructor
 end shape
+
+program main
+    keep w as Widget with value new Widget with 3 and "hello"
+    call describe of w
+end program
 ```
+
+- **Instantiation: `keep NAME as TYPE with value new TYPE with ARG1 and ARG2`**
+  — a `new`-expression must be the value in a single `keep ... with
+  value` declaration (this is what actually invokes the constructor and
+  produces a real `std::unique_ptr<TYPE>` under the hood, even though
+  `TYPE` alone — not `unique handle to TYPE` — is what you write).
+  Declaring the variable first (`with no value`) and assigning `new`
+  into it via a separate `put ... into` statement does **not** work —
+  the emitter's smart-pointer handling is keyed off seeing `new` at the
+  point of declaration.
+- **Calling a method: `call METHOD_NAME of INSTANCE [with ARGS] [giving RESULT]`**
+  — this is the SAME `of`-syntax as plain field access (§11), not
+  `INSTANCE.METHOD_NAME` (that dotted form is reserved for
+  `Module.action`-style calls, a different thing entirely).
+- **Field access/assignment inside a method/constructor/destructor body
+  is bare** (`id`, `label`) — there is no `this`/`self` keyword in this
+  language at all; a field (including one inherited from a parent
+  shape) is simply in scope by its own name inside any of that class's
+  own method/constructor/destructor bodies.
+
+`grammar.py`/`parser.py` recognize a fuller class-like form inside `shape
+... holds` on the C++ backend:
 
 - **`extends PARENT`** — alternative to `is a PARENT`; both set the same
   parent field.
@@ -550,10 +588,19 @@ end shape
   `nothing`.
 - **`destructor produces nothing ... end destructor`** — at most one per
   shape, no parameters.
-- `virtual` and `override` are reserved grammar words for this same
-  C++-backend class path (method dispatch modifiers) but this session
-  did not trace or compile their handling — treat as **[UNVERIFIED]**
-  until confirmed against `parser.py`/`emit_cpp.py` directly.
+- **`virtual` and `override` — reserved but NOT currently wired to any
+  syntax [VERIFIED NEGATIVE].** They exist as grammar keywords and as
+  `Method`/`Constructor` AST fields (`is_virtual`/`is_override`,
+  defaulting `False`), but no parser rule ever sets either field, and no
+  prefix form (`virtual method ...`) parses — confirmed by actually
+  trying it: `Expected ('as',), got 'method'`. **You don't need to write
+  `virtual` for normal inheritance to work, though:** every method on a
+  class that has a parent (`extends`) is automatically emitted
+  `virtual` regardless, so overriding a parent's method by declaring a
+  same-named method on the child Just Works (confirmed — see R101's
+  `Animal`/`Dog` case in the fixture history) — `virtual`/`override` as
+  written keywords are simply inert right now, not a blocker to normal
+  polymorphism.
 
 ## 11b. Tagged enum-like variants — `possibilities` [TRACED]
 

@@ -5774,6 +5774,65 @@ def test_r100_traceability_check(tmp):
                    "deliberate breakage) correctly reports OK")
 
 
+@regression("R101 C++ class fields (constructor/method/destructor bodies) -- "
+            "completely untested before this (HANDOFF.md §5.4: 'C++ classes, "
+            "methods, templates: UNTESTED'). The FIRST real program written "
+            "against this path (`shape ... holds` with a constructor) found "
+            "a genuine SILENT WRONG ANSWER: emit_cpp.py's Assignment "
+            "auto-declare heuristic checks self.declared_vars, which never "
+            "knew about a class's own fields (tracked separately in "
+            "self.shapes) -- so `set id to wid` inside a constructor emitted "
+            "`int32_t id = wid;`, a FRESH LOCAL SHADOWING the real member, "
+            "not `id = wid;`. Compiled cleanly; the object's field was left "
+            "uninitialized. A second, independent instance of the SAME bug "
+            "class was then found one level up: the VALIDATOR rejected a "
+            "subclass method referencing an INHERITED field ('Use of "
+            "undeclared variable') because only a class's own fields, never "
+            "its ancestors', were ever registered into the method/"
+            "constructor/destructor body scope. Both fixed: emit_cpp seeds "
+            "declared_vars with own+inherited fields for the duration of "
+            "class-body emission (restored after); validator.ShapeDef now "
+            "tracks `parent` and walks the chain the same way. Verifies "
+            "against a real fixture (tests/classes/) exercising inheritance, "
+            "a constructor assigning both an own field and an inherited "
+            "one, a method reading both, and a destructor -- the exact "
+            "shape of program that found the bug")
+def test_r101_cpp_class_fields(tmp):
+    src = os.path.join(HERE, "tests", "classes", "widget.dict")
+    if not os.path.exists(src):
+        return False, "tests/classes/widget.dict missing"
+    out_bin = os.path.join(tmp, "widget")
+    r = subprocess.run([sys.executable, CLI, src, "--backend", "cpp",
+                        "--compile", "--output", out_bin],
+                        capture_output=True, text=True, timeout=120, cwd=HERE)
+    if r.returncode != 0:
+        return False, f"build failed: {(r.stdout + r.stderr)[-400:]}"
+    run = _run(out_bin, timeout=20)
+    out = "".join(run.stdout.split())
+    if "id=3" not in out:
+        return False, (f"constructor did not really set the 'id' field "
+                        f"(shadow-local regression?): {out!r}")
+    if "label=hello" not in out:
+        return False, (f"constructor did not set the INHERITED 'label' "
+                        f"field, or the method couldn't read it: {out!r}")
+    if "cleanup" not in out:
+        return False, f"destructor did not run: {out!r}"
+
+    # Directly re-assert the exact previously-buggy line in the generated
+    # source, so a regression shows up as a diffable string, not just a
+    # runtime-output coincidence.
+    gen = out_bin + ".cpp"
+    if os.path.exists(gen):
+        cpp_src = open(gen).read()
+        if "int32_t id = wid" in cpp_src or "auto id = wid" in cpp_src:
+            return False, ("the constructor is STILL emitting a shadowing "
+                            "local declaration for 'id' instead of a plain "
+                            "assignment -- the exact regression this test "
+                            "exists to catch")
+
+    return True, f"ok -- own field, inherited field, and destructor all correct: {out!r}"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 
