@@ -98,8 +98,12 @@ hand-parsing gcc output):**
 python3 scripts/dictum_compiler/compiler/dict_triage.py FILE_OR_PROJECT_DIR --backend c --json
 ```
 Returns `{"case": "A"|"B"|"C"|"D", ...}`. **Case A** = fix the `.dict`
-file. **Case B** = genuinely ambiguous, ask a specific question, don't
-guess. **Case C** = looks like a real compiler bug -- this changes
+file -- for the small set of recurring mistakes below (a missing
+`using`/`then`/`with text`), each error in the JSON's `errors` array
+also carries `construct`/`expected`/`got`/`fix` fields with the exact
+correction, not just raw parser prose -- check for these before
+hand-diagnosing. **Case B** = genuinely ambiguous, ask a specific
+question, don't guess. **Case C** = looks like a real compiler bug -- this changes
 shared infrastructure every future project depends on, so treat it as
 needing a real regression test and a second look, not a quick patch.
 **Case D** = a declared library isn't "blessed" for this target yet.

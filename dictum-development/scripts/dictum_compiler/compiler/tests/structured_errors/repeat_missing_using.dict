@@ -1,0 +1,5 @@
+program p
+    repeat 4 times
+        print the text "x"
+    end repeat
+end program

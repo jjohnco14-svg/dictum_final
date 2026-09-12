@@ -244,10 +244,13 @@ def try_parse_and_validate(source: str, backend: str, stdlib: bool = True,
     except SyntaxError as e:
         msg = str(e)
         m = _SYNTAX_LINE_RE.search(msg)
+        errs = [{"line": int(m.group(1)) if m else None, "message": msg}]
+        from dictumc.structured_errors import enrich_errors
+        errs = enrich_errors(errs, source)
         return {
             "ok": False,
             "stage": "syntax",
-            "errors": [{"line": int(m.group(1)) if m else None, "message": msg}],
+            "errors": errs,
         }
     except ValidationError as e:
         errs = []
@@ -260,6 +263,8 @@ def try_parse_and_validate(source: str, backend: str, stdlib: bool = True,
                 errs.append({"line": int(vm.group(1)), "message": vm.group(2)})
             else:
                 errs.append({"line": None, "message": part})
+        from dictumc.structured_errors import enrich_errors
+        errs = enrich_errors(errs, source)
         return {"ok": False, "stage": "validation", "errors": errs}
 
 

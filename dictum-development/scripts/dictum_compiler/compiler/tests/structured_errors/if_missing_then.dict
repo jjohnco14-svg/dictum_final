@@ -1,0 +1,6 @@
+program p
+    keep x as whole number with value 5
+    if x is greater than 3
+        print the text "big"
+    end if
+end program

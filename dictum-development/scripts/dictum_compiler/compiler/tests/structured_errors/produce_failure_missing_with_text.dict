@@ -1,0 +1,7 @@
+program p
+    attempt
+        produce failure "bad"
+    on failure with err
+        print the text err
+    end attempt
+end program

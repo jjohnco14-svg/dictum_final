@@ -5879,6 +5879,93 @@ def test_r102_net_thread_end_to_end(tmp):
     return True, f"ok -- real socket send/receive across a real pthread, agreeing on {sorted(outputs)}"
 
 
+@regression("R103 dictumc/structured_errors.py -- Case A errors get a real "
+            "repair-loop PAYLOAD, not just raw parser prose (HANDOFF.md "
+            "§9.2: 'Structured errors, not prose... an AI should not parse "
+            "English to know what to do next'). dict_triage.py --json "
+            "already existed and already classified Case A/B/C/D, but the "
+            "payload for a Case A error was whatever the parser exception "
+            "happened to say -- confirmed: `repeat 4 times` (missing "
+            "`using i`) and `if x is greater than 3` (missing `then`) "
+            "produce the IDENTICAL generic message 'Expected word, got "
+            "NEWLINE at line N', giving an AI consumer nothing to act on "
+            "beyond re-deriving the mistake from scratch. Fixed by "
+            "independently re-examining the offending source line against "
+            "known real mistake patterns (mirrors tools/vocabulary.py's "
+            "common_mistakes) and attaching construct/expected/got/fix "
+            "alongside (never instead of) the original line/message. Also "
+            "found and fixed a real off-by-one while building this: the "
+            "underlying parser error consistently points ONE LINE PAST the "
+            "actual mistake for both the repeat and if cases (confirmed on "
+            "real repros) -- enrich_error checks one line back before "
+            "giving up, and reports the CORRECTED line, not the parser's "
+            "original downstream one")
+def test_r103_structured_errors(tmp):
+    fixtures = {
+        "repeat": ("repeat_missing_using.dict", "repeat 4 times", "using"),
+        "if": ("if_missing_then.dict", "if x is greater than 3", "then"),
+        "produce_failure": ("produce_failure_missing_with_text.dict",
+                             'produce failure "bad"', "with text"),
+    }
+    fdir = os.path.join(HERE, "tests", "structured_errors")
+    if not os.path.isdir(fdir):
+        return False, "tests/structured_errors/ missing"
+
+    for construct, (fname, expected_got, must_contain_in_fix) in fixtures.items():
+        fpath = os.path.join(fdir, fname)
+        if not os.path.exists(fpath):
+            return False, f"fixture missing: {fname}"
+        r = subprocess.run([sys.executable, os.path.join(HERE, "dict_triage.py"),
+                            fpath, "--backend", "c", "--json"],
+                            capture_output=True, text=True, timeout=60, cwd=HERE)
+        try:
+            report = json.loads(r.stdout)
+        except Exception as e:
+            return False, f"[{construct}] --json stdout is not valid JSON: {e}"
+        errs = report.get("errors") or []
+        matches = [e for e in errs if e.get("construct") == construct]
+        if not matches:
+            return False, (f"[{construct}] no enriched error found -- "
+                            f"raw errors: {errs}")
+        hit = matches[0]
+        if hit.get("got", "").strip() != expected_got:
+            return False, f"[{construct}] wrong 'got' line: {hit.get('got')!r}"
+        if must_contain_in_fix not in hit.get("fix", ""):
+            return False, (f"[{construct}] fix suggestion doesn't mention "
+                            f"'{must_contain_in_fix}': {hit.get('fix')!r}")
+        if "line" not in hit or not hit["line"]:
+            return False, f"[{construct}] enriched error has no line number: {hit}"
+
+    # Negative check: valid code using all three correct forms must NOT be
+    # flagged by any pattern (false-positive guard).
+    valid_src = os.path.join(tmp, "valid.dict")
+    open(valid_src, "w").write(
+        'program p\n'
+        '    keep err as text with value ""\n'
+        '    attempt\n'
+        '        repeat 3 times using i\n'
+        '            keep x as whole number with value 5\n'
+        '            if x is greater than 3 then\n'
+        '                print the text "big"\n'
+        '            end if\n'
+        '        end repeat\n'
+        '        produce failure with text "bad"\n'
+        '    on failure with e\n'
+        '        put e into err\n'
+        '    end attempt\n'
+        '    print the text err\n'
+        'end program\n')
+    r = subprocess.run([sys.executable, os.path.join(HERE, "dict_triage.py"),
+                        valid_src, "--backend", "c", "--json"],
+                        capture_output=True, text=True, timeout=60, cwd=HERE)
+    report = json.loads(r.stdout)
+    if report.get("errors"):
+        return False, (f"false positive -- valid code using all three correct "
+                        f"forms was flagged: {report['errors']}")
+
+    return True, "ok -- repeat/if/produce_failure all enriched correctly, no false positives"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 
