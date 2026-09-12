@@ -5549,6 +5549,58 @@ def test_r97_phrased_ffi_dictation(tmp):
     return True, f"ok -- phrased FFI calls work and agree across {sorted(outputs)}"
 
 
+@regression("R98 a Dictum action passed as a real C CALLBACK into a "
+            "third-party library. This is what makes `import from C` a "
+            "general interop mechanism rather than a way to call simple "
+            "leaf functions -- callbacks are everywhere in real C APIs "
+            "(qsort, event loops, parsers, llama.cpp samplers). The C++ "
+            "side was genuinely broken: an action-typed FFI parameter was "
+            "spelled std::function, which is a C++ OBJECT, not a function "
+            "pointer -- ABI-incompatible with a C callee expecting "
+            "int(*)(int,int), and it SEGFAULTED at the call. std::function "
+            "remains correct for Dictum-internal higher-order actions; only "
+            "the extern \"C\" path needs the raw pointer spelling")
+def test_r98_c_callback_from_dictum(tmp):
+    src_dir = os.path.join(HERE, "tests", "callback")
+    if not os.path.isdir(src_dir):
+        return None, "SKIP: tests/callback fixtures not present"
+    work = os.path.join(tmp, "cb")
+    shutil.copytree(src_dir, work)
+
+    obj = os.path.join(work, "mylib.o")
+    r0 = subprocess.run(["gcc", "-c", os.path.join(work, "mylib.c"), "-o", obj],
+                        capture_output=True, text=True, timeout=60)
+    if r0.returncode != 0:
+        return False, f"callback library failed to build: {r0.stderr[-200:]}"
+
+    for backend, cc, ext in (("c", "gcc", ".c"), ("cpp", "g++", ".cpp")):
+        gen = os.path.join(work, f"uc_{backend}{ext}")
+        r = subprocess.run(
+            [sys.executable, CLI, os.path.join(work, "usecb.dict"),
+             "--backend", backend, "--output", gen],
+            capture_output=True, text=True, timeout=180, cwd=HERE)
+        if r.returncode != 0:
+            return False, f"[{backend}] transpile failed: {(r.stdout+r.stderr)[-300:]}"
+        binp = os.path.join(work, f"cb_{backend}")
+        rb = subprocess.run([cc, gen, obj, "-o", binp],
+                            capture_output=True, text=True, timeout=120)
+        if rb.returncode != 0:
+            hint = (" -- an action-typed FFI parameter is being spelled "
+                    "std::function instead of a raw function pointer"
+                    if "std::function" in rb.stderr else "")
+            return False, f"[{backend}] compile/link failed{hint}: {rb.stderr[-300:]}"
+        run = _run(binp, timeout=20)
+        if run.returncode != 0:
+            return False, (f"[{backend}] callback binary crashed (exit "
+                            f"{run.returncode}) -- a C++ object was almost "
+                            f"certainly passed where a function pointer was "
+                            f"expected")
+        if "max=9" not in run.stdout:
+            return False, (f"[{backend}] callback returned the wrong result: "
+                            f"{run.stdout!r} (expected max=9)")
+    return True, "ok -- Dictum action invoked as a C callback on c and cpp"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

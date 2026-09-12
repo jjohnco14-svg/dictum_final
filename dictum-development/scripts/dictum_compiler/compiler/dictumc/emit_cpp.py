@@ -630,6 +630,46 @@ class CppEmitter:
             base = base.replace('.', '::')
         return base
 
+
+    def _fn_type_raw_cpp(self, t: str):
+        """Raw C function-pointer spelling for an action type, for use in
+        `extern "C"` FFI signatures.
+
+        type_to_cpp maps an action type to std::function, which is correct
+        for a Dictum-internal higher-order action -- but std::function is a
+        C++ OBJECT, not a function pointer. Passing one to a C function that
+        expects `int(*)(int,int)` is ABI-incompatible and SEGFAULTS at the
+        call. The FFI path therefore needs the raw pointer spelling.
+        """
+        import re as _re
+        body = t.strip()
+        if not (body.startswith("action taking ") or body.startswith("action produces ")):
+            return None
+        ret = "void"
+        m = _re.search(r"\bproduces\s+(.+)$", body)
+        if m:
+            r = m.group(1).strip()
+            ret = "void" if r == "nothing" else self.type_to_cpp(r)
+        ps = []
+        m2 = _re.search(r"\btaking\s+(.+?)\s+produces\b", body)
+        if m2:
+            for part in m2.group(1).split(" and "):
+                part = part.strip()
+                pm = _re.match(r"\w+\s+as\s+(.+)$", part)
+                ps.append(self.type_to_cpp(pm.group(1).strip() if pm else part))
+        # A function-pointer type puts the PARAMETER NAME inside the
+        # parens (`int(*f)(int)`), which does not fit a "render type, then
+        # name" emitter -- the same problem emit_c.py solved with a
+        # typedef. Do the same here so the spelling is usable both as a
+        # bare type (in the extern) and with a name (in the wrapper).
+        sig = f"{ret}(*)({', '.join(ps)})"
+        name = "dictum_cfn_" + _re.sub(r"[^0-9A-Za-z]+", "_", sig).strip("_").lower()
+        if not hasattr(self, "_cfn_typedefs"):
+            self._cfn_typedefs = {}
+        self._cfn_typedefs[name] = (
+            f"typedef {ret} (*{name})({', '.join(ps)});")
+        return name
+
     def _resolve_call_name(self, name: str) -> str:
         # SHARED: see type_semantics.resolve_call_name. This emitter used to
         # have its OWN copy which was missing two fixes emit_c had -- the
@@ -773,7 +813,13 @@ class CppEmitter:
             if _sig:
                 for _i, _pt in enumerate(_sig[0] or []):
                     if _i < len(processed):
-                        _ct = self.type_to_cpp(str(_pt).strip())
+                        # Raw function-pointer spelling for an action-typed
+                        # FFI parameter: casting to std::function here
+                        # produced a C++ OBJECT where the C callee expects a
+                        # function pointer, which compiles as a conversion
+                        # error at best and is ABI-incompatible at worst.
+                        _ct = (self._fn_type_raw_cpp(str(_pt).strip())
+                               or self.type_to_cpp(str(_pt).strip()))
                         processed[_i] = f"({_ct})({processed[_i]})"
             args = ", ".join(processed)
             if c_name in ('success', '__produce_success'):
@@ -1412,7 +1458,8 @@ class CppEmitter:
             # undefined-reference at link time whenever alias !=
             # action_name. Mirrors the C backend's fix: declare the real
             # symbol, then provide an inline wrapper under the alias.
-            cpp_params = [self.type_to_cpp(p) for p in node.params]
+            cpp_params = [(self._fn_type_raw_cpp(p) or self.type_to_cpp(p))
+                          for p in node.params]
             ret_cpp = self.type_to_cpp(node.ret_type)
             params_decl = ", ".join(cpp_params)
             # BUGFIX (extern "C" linkage): `import from C` binds to a
@@ -1785,6 +1832,20 @@ class CppEmitter:
 
     # ------------------------------------------------------------------
     def get_output(self) -> str:
+        # Emit function-pointer typedefs generated for FFI action
+        # parameters. They are only discovered while rendering a signature,
+        # so they are spliced in after the include block here.
+        if getattr(self, "_cfn_typedefs", None):
+            at = 0
+            for i, line in enumerate(self.output):
+                st = line.strip()
+                if st.startswith("#include") or st.startswith("#define") or not st:
+                    at = i + 1
+                else:
+                    break
+            for off, td in enumerate(sorted(set(self._cfn_typedefs.values()))):
+                self.output.insert(at + off, td)
+            self._cfn_typedefs = {}
         if not self._includes_emitted:
             # FIX: fragment-only file (no Program/Module ever encountered
             # to trigger preamble emission) -- see comment above. Prepend

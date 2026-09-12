@@ -1,0 +1,17 @@
+action pick_max takes a as whole number and b as whole number produces whole number
+    keep r as whole number with value 0
+    put a into r
+    if b is greater than a then
+        put b into r
+    end if
+    return r
+end action
+
+import from C the action apply_reduce takes opaque pointer and whole number and action taking A as whole number and B as whole number produces whole number produces whole number as reduce_with
+
+program main
+    keep xs as list of whole number with values 5, 3, 9, 1
+    keep best as whole number with value 0
+    call reduce_with with the address of xs and 4 and pick_max giving best
+    print the text "max=" and best
+end program
