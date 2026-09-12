@@ -949,6 +949,21 @@ class CEmitter:
         return None
 
     def _resolve_call_name(self, name: str) -> str:
+        # SHARED: see type_semantics.resolve_call_name. Kept as a thin
+        # delegation so both C-family emitters apply the same rules --
+        # emit_cpp was missing the sanitize step entirely, so `action sqrt`
+        # compiled on c and failed on cpp.
+        return _type_sem.resolve_call_name(
+            name,
+            module_call_map=_MODULE_CALL_MAP,
+            ffi_aliases=getattr(self, '_ffi_aliases', ()),
+            current_module=self.current_module,
+            module_actions=self._module_actions,
+            active_local_modules=self._active_local_modules,
+            reserved=_C_RESERVED,
+        )
+
+    def _resolve_call_name_legacy(self, name: str) -> str:
         if '.' in name:
             return _MODULE_CALL_MAP.get(name, name.replace('.', '_'))
         if name in getattr(self, '_ffi_aliases', ()):

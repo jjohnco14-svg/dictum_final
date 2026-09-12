@@ -5416,6 +5416,72 @@ def test_r95_emitters_agree_on_inference(tmp):
     return True, f"ok -- both emitters agree on all {len(cases)} expression kinds"
 
 
+@regression("R96 call-name resolution is SHARED, and emit_cpp gains two "
+            "fixes it never had. `Which symbol does this call resolve to?` "
+            "is one semantic question, but each C-family emitter answered "
+            "it separately -- and emit_cpp was missing BOTH the "
+            "reserved-name sanitize (so `action sqrt` compiled on c and "
+            "FAILED to compile on cpp) and the FFI-alias guard from R18 "
+            "(a deliberate `import from C ... as sqrt` must NOT be "
+            "renamed). Those two rules pull in OPPOSITE directions on the "
+            "same name, which is exactly why one implementation beats "
+            "three")
+def test_r96_shared_call_name_resolution(tmp):
+    # 1. An action named after a C-reserved function must work everywhere.
+    src = os.path.join(tmp, "sanit.dict")
+    open(src, "w").write(
+        'action sqrt takes n as whole number produces whole number\n'
+        '    keep r as whole number with value 0\n'
+        '    put n plus 1 into r\n'
+        '    return r\n'
+        'end action\n\n'
+        'program main\n'
+        '    keep v as whole number with value 0\n'
+        '    call sqrt with 41 giving v\n'
+        '    print the text "r=" and v\n'
+        'end program\n')
+    for backend in ("c", "cpp", "nim"):
+        if backend == "nim" and shutil.which("nim") is None:
+            continue
+        out_bin = os.path.join(tmp, f"sn_{backend}")
+        r = subprocess.run(
+            [sys.executable, CLI, src, "--backend", backend, "--compile",
+             "--output", out_bin],
+            capture_output=True, text=True, timeout=180, cwd=HERE)
+        if r.returncode != 0:
+            return False, (f"[{backend}] an action named after a C-reserved "
+                            f"function failed to build -- the sanitize step is "
+                            f"missing from this emitter: {(r.stdout+r.stderr)[-260:]}")
+        run = _run(out_bin, timeout=20)
+        if "r=42" not in run.stdout:
+            return False, f"[{backend}] unexpected output: {run.stdout!r}"
+
+    # 2. The two rules interact: an FFI ALIAS equal to a reserved name must
+    # NOT be sanitized, or its extern (emitted under the real name) is
+    # never found. Asserted directly against the shared resolver.
+    sys.path.insert(0, HERE)
+    from dictumc import type_semantics as ts
+    from dictumc.emit_c import _C_RESERVED
+    common = dict(module_call_map={}, current_module=None, module_actions={},
+                  active_local_modules=(), reserved=_C_RESERVED)
+    as_action = ts.resolve_call_name("sqrt", ffi_aliases=(), **common)
+    as_ffi = ts.resolve_call_name("sqrt", ffi_aliases=("sqrt",), **common)
+    if as_action != "dictum_sqrt":
+        return False, f"a reserved action name was not sanitized: {as_action!r}"
+    if as_ffi != "sqrt":
+        return False, (f"an FFI alias was renamed to {as_ffi!r} -- R18: its "
+                        f"extern was emitted under the real name, so renaming "
+                        f"the call site makes it unresolvable")
+
+    # 3. Both emitters must delegate, not keep private copies.
+    for mod in ("emit_c.py", "emit_cpp.py"):
+        body = open(os.path.join(HERE, "dictumc", mod)).read()
+        if "type_semantics.resolve_call_name" not in body and \
+           "_type_sem.resolve_call_name" not in body:
+            return False, f"{mod} no longer delegates call-name resolution"
+    return True, "ok -- one resolver, both emitters, FFI-alias vs sanitize both honoured"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

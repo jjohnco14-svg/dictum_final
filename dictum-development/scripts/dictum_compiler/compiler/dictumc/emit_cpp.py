@@ -631,14 +631,20 @@ class CppEmitter:
         return base
 
     def _resolve_call_name(self, name: str) -> str:
-        if '.' in name:
-            return _MODULE_CALL_MAP.get(name, name.replace('.', '_'))
-        if self.current_module and name in self._module_actions.get(self.current_module, ()):
-            return f"{self.current_module}_{name}"
-        for mod in self._active_local_modules:
-            if name in self._module_actions.get(mod, ()):
-                return f"{mod}_{name}"
-        return name
+        # SHARED: see type_semantics.resolve_call_name. This emitter used to
+        # have its OWN copy which was missing two fixes emit_c had -- the
+        # reserved-name sanitize (so `action sqrt` failed to compile here
+        # while working on c) and the FFI-alias guard (R18).
+        from .emit_c import _C_RESERVED
+        return _type_sem.resolve_call_name(
+            name,
+            module_call_map=_MODULE_CALL_MAP,
+            ffi_aliases=getattr(self, '_ffi_aliases', ()),
+            current_module=self.current_module,
+            module_actions=self._module_actions,
+            active_local_modules=self._active_local_modules,
+            reserved=_C_RESERVED,
+        )
 
     # ------------------------------------------------------------------
     def expr_to_cpp(self, node: Node) -> str:

@@ -232,3 +232,45 @@ def infer_kind(node, var_kind, action_ret_kind, *, _depth: int = 0) -> str:
     if cls == "FuncCall":
         return action_ret_kind(getattr(node, "name", "")) or UNKNOWN
     return UNKNOWN
+
+
+# ---------------------------------------------------------------------------
+# CALL-NAME RESOLUTION
+#
+# "Which symbol does this call name resolve to?" is a SEMANTIC question with
+# one right answer, but emit_c and emit_cpp answered it separately -- and
+# emit_cpp was missing TWO fixes emit_c had:
+#
+#   * _sanitize_action_name  (an action named after a C-reserved function
+#     must be renamed). `action sqrt` compiled on c and FAILED on cpp.
+#   * the FFI-alias guard (R18): a deliberate `import from C ... as sqrt`
+#     binding must NOT be renamed, because its extern was emitted under
+#     that exact name.
+#
+# Those two rules pull in OPPOSITE directions on the same name, which is
+# precisely why having one implementation matters: getting the interaction
+# right once beats getting it right in three places.
+# ---------------------------------------------------------------------------
+
+def resolve_call_name(name, *, module_call_map, ffi_aliases, current_module,
+                      module_actions, active_local_modules, reserved,
+                      sanitize=True):
+    """Resolve a Dictum call name to its target symbol.
+
+    Order matters and is the union of both emitters' rules:
+      1. dotted name  -> the module call map (stdlib/FFI table)
+      2. FFI alias    -> verbatim, never renamed (R18)
+      3. same-module sibling / `use`d module action -> Module_action mangling
+      4. otherwise    -> sanitized bare name
+    """
+    if "." in name:
+        return module_call_map.get(name, name.replace(".", "_"))
+    if name in (ffi_aliases or ()):
+        return name
+    safe = f"dictum_{name}" if (sanitize and name in (reserved or ())) else name
+    if current_module and name in (module_actions.get(current_module) or ()):
+        return f"{current_module}_{safe}"
+    for mod in (active_local_modules or ()):
+        if name in (module_actions.get(mod) or ()):
+            return f"{mod}_{safe}"
+    return safe
