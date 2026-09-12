@@ -758,6 +758,37 @@ defer release my_handle
 - **`action taking A as T1 and B as T2 produces T3`** — an anonymous
   *function-type* annotation (e.g. for a callback parameter's declared
   type), distinct from declaring an actual `action`.
+- **Passing an action BY NAME as a value** — an already-declared
+  `action`'s bare name, used where a value of that function-type is
+  expected, is a real, verified higher-order call — not just the type
+  annotation above, but actually *producing* a value of that type:
+  ```
+  action twice takes n as whole number produces whole number
+      keep r as whole number with value 0
+      put n times 2 into r
+      return r
+  end action
+
+  action apply takes f as action taking A as whole number produces whole number and v as whole number produces whole number
+      keep r as whole number with value 0
+      call f with v giving r
+      return r
+  end action
+
+  program p
+      keep out1 as whole number with value 0
+      call apply with twice and 21 giving out1
+      print the text "r=" and out1
+  end program
+  ```
+  Compiled, run, and confirmed `r=42` on all three backends — R85 in
+  `compiler/run_selftest.py`, fixture at `compiler/tests/hof/`. Worth
+  knowing: the C++ backend's own action-typed *FFI* parameters (an
+  `import from C`/`C++` callback, as opposed to this Dictum-internal
+  case) need the raw C function-pointer spelling, not `std::function` —
+  see §14's `import from C++`/callback notes and R98 if you're binding
+  a callback into a third-party C library rather than passing a Dictum
+  action to another Dictum action as shown here.
 - **`holding`** — reserved in the grammar's word list alongside `holds`,
   but no current parser rule actually consumes it as functional syntax.
   Do not use it expecting `holds`-equivalent behavior; treat as
@@ -831,13 +862,33 @@ and TYPE ... produces RETURN_TYPE as DICTUM_ALIAS`
   `opaque pointer` in the `takes`/`produces` list. You then pass Dictum
   values of matching shape — typically you'll be threading an opaque
   handle you got back from one imported function into the next one.
-  **Known gap, real-tested, not worked around:** there is no "address
-  of a local variable" / by-reference mechanism anywhere in the
-  language, so a C signature that wants an out-parameter double
-  pointer (`sqlite3_open`'s `sqlite3 **`, "give me a pointer slot to
-  write the real handle into") cannot be called yet. Anything that
-  only *passes* an opaque pointer it already has (not asking Dictum to
-  produce the address of one of its own locals) is fine.
+- **Out-parameters — `the address of NAME`** — a C signature that wants
+  a pointer slot to write into (`sqlite3_open`'s `sqlite3 **ppDb`, "give
+  me the address of a local so you can fill it in") is callable directly
+  via the address-of operator, with **no hand-written C shim**:
+  ```
+  import from C the action sqlite3_open takes text and opaque pointer produces whole number as sqlite3_open
+  import from C the action sqlite3_close takes opaque pointer produces whole number as sqlite3_close
+
+  program noshim
+      keep db as opaque pointer with no value
+      keep rc as whole number with value 0
+      call sqlite3_open with "mydb.db" and the address of db giving rc
+      print the text "open_rc=" and rc
+      call sqlite3_close with db giving rc
+  end program
+  ```
+  Compiled, linked against the real `libsqlite3.so`, and run on all
+  three backends (C, C++, Nim) with no shim — R83 in
+  `compiler/run_selftest.py`, fixture at `compiler/tests/addressof/`.
+  Two things worth knowing about the semantics: (1) taking the address
+  of an **uninitialized** variable (`with no value`) is not treated as
+  reading it — that's precisely what an out-parameter needs, and the
+  validator has an explicit exemption for it; (2) `the address of` on a
+  **container** (a `list`/`growable list`/`map`/`set`) yields the
+  address of the real underlying buffer on every backend, not the
+  address of a wrapper object — this matters because getting it wrong
+  on the C++/Nim side is a real, previously-hit segfault (see R86).
 - **`--link LIBNAME`** (repeatable, e.g. `--link sqlite3 --link m`) is
   the CLI flag that actually links the external library — pass one for
   every real system library your `import from C` calls into.
@@ -881,6 +932,44 @@ signature.
 bindings (hashing, encryption primitives) — it does **not** include
 any TLS/SSL handshake functions (no `SSL_CTX`/`SSL_connect`), so it
 does not get you HTTPS despite being "the OpenSSL bridge."
+
+### 13a. `phrased as` — giving a foreign function a natural-language call form [VERIFIED]
+
+An `import from C`/`import from C++` binding can carry an additional
+`phrased as "..."` clause that registers a natural-language sentence
+form for calling it, so the call site reads like the rest of Dictum
+instead of `call c_alias with ... giving ...`:
+
+```
+import from C the action sqlite3_libversion takes nothing produces text as db_version phrased as "the database version"
+import from C the action abs takes whole number produces whole number as c_abs phrased as "the magnitude of {}"
+
+program main
+    keep v as text with value ""
+    the database version giving v
+    keep m as whole number with value 0
+    the magnitude of 0 minus 42 giving m
+    print the text "abs=" and m
+end program
+```
+Compiled and run on all three backends, all agreeing on `abs=42` — R97
+in `compiler/run_selftest.py`.
+
+- **`{}` is a positional placeholder** — one per parameter, in order.
+  The placeholder count must exactly match the bound action's arity; a
+  phrase with the wrong number of `{}`s is rejected at parse time, not
+  silently mis-called.
+- **A phrase must start with a literal word**, not a placeholder — `"{}
+  squared"` is rejected for the same reason: a call site starting with
+  a value rather than a recognizable word isn't parseable as a
+  sentence.
+- This lowers to an ordinary call at the AST level — **zero emitter
+  changes were needed for any backend** — so it can never become a
+  fourth place backend drift can hide.
+- Use this for FFI bindings you'll call often enough that the raw
+  `call ... with ... giving ...` form would otherwise be the only
+  non-natural-language-reading part of an otherwise natural-language
+  program.
 
 ---
 
@@ -1303,3 +1392,40 @@ write this section** (e.g. you're translating an ambiguous request),
 say so explicitly in the README rather than guessing — this is the
 same "don't guess, ask" discipline as Guide B's Case B, applied before
 the submission ever reaches Guide B.
+
+---
+
+## 21. Tooling — building, checking, and knowing what exists [NEW]
+
+Everything above is the language itself. These are the real,
+already-built tools that go with it — worth knowing before reaching
+for a hand-rolled `gcc`/`Makefile` invocation or grepping compiler
+source to answer "does X exist."
+
+- **`tools/dictum.py`** — one command instead of knowing every backend's
+  own build steps by hand (`make` for c/cpp, `build.sh` for nim,
+  `--link` flags `import from C` doesn't carry, `--passL` ordering for
+  nim). `dictum build <path> [--backend c|cpp|nim]` builds a single file
+  or a project directory and resolves link flags from the blessed
+  manifests automatically. `dictum check <path>` builds on **all three**
+  backends and diffs the output — cross-backend VALUE disagreement has
+  been this project's single highest-yield bug signal (it caught a C++
+  shadowing bug that a 94-test suite and a full feature×context matrix
+  both missed). `dictum libs` shows which libraries are blessed, on
+  which targets.
+- **`dictum vocabulary [--json]`** — one machine-readable artefact
+  (regenerated fresh from the real registries every time, never
+  hand-maintained) covering every grammar keyword, all 92 stdlib
+  signatures with live per-backend status, and every blessed library's
+  real bindings. Use this — not memory, not grepping compiler source —
+  to check "does X exist" or "what's its exact signature" before
+  writing a call to it.
+- **The Nim stdlib bridge (`dictumc/nim_stdlib.py`)** — `use
+  Text`/`File`/`Math`/etc. work identically on the **Nim backend**, not
+  just C/C++. This used to be the single biggest gap making Nim a
+  second-class backend (any stdlib-using program failed on Nim with
+  "undeclared identifier"); it's real now, auto-enabled with no extra
+  flag, and stdlib output is confirmed byte-identical across all three
+  backends (R84 in `compiler/run_selftest.py`). Current coverage: 40 of
+  92 stdlib functions have a Nim mapping — check `dictum vocabulary`'s
+  `nim_available` field per function rather than assuming.
