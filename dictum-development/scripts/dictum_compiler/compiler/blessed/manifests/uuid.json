@@ -1,0 +1,38 @@
+{
+  "library": "uuid",
+  "link": [
+    "uuid"
+  ],
+  "headers": [
+    "uuid/uuid.h"
+  ],
+  "shapes": [],
+  "imports": [
+    {
+      "c_name": "uuid_generate",
+      "params": [
+        "opaque pointer"
+      ],
+      "returns": "nothing",
+      "alias": "uuid_generate"
+    },
+    {
+      "c_name": "uuid_unparse",
+      "params": [
+        "opaque pointer",
+        "opaque pointer"
+      ],
+      "returns": "nothing",
+      "alias": "uuid_unparse"
+    }
+  ],
+  "verify": {
+    "body": "    keep raw as list of byte with values 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n    call uuid_generate with the address of raw\n    print the text \"uuid_ok=1\"",
+    "expect_regex": "uuid_ok=1"
+  },
+  "_verified": {
+    "c": true,
+    "cpp": true,
+    "nim": true
+  }
+}

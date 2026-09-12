@@ -5482,6 +5482,73 @@ def test_r96_shared_call_name_resolution(tmp):
     return True, "ok -- one resolver, both emitters, FFI-alias vs sanitize both honoured"
 
 
+@regression("R97 `phrased as` -- a DICTATION for a foreign function. "
+            "`import from C/C++ ... as alias phrased as \"the magnitude of "
+            "{}\"` registers a natural-language call form, so the call site "
+            "reads `the magnitude of x giving m` instead of `call c_abs "
+            "with x giving m`. Dictum's premise is that code reads like "
+            "language; before this, anything reached through FFI was "
+            "excluded from that. Also checks the two guards that stop a "
+            "phrase from silently doing the wrong thing: placeholder count "
+            "must equal the action's arity, and a phrase must start with a "
+            "literal word so it is recognisable at a call site")
+def test_r97_phrased_ffi_dictation(tmp):
+    if not os.path.exists("/usr/include/sqlite3.h"):
+        return None, "SKIP: libsqlite3-dev not available"
+    src = os.path.join(tmp, "ph.dict")
+    open(src, "w").write(
+        'import from C the action sqlite3_libversion takes nothing produces '
+        'text as db_version phrased as "the database version"\n'
+        'import from C the action abs takes whole number produces whole '
+        'number as c_abs phrased as "the magnitude of {}"\n\n'
+        'program main\n'
+        '    keep v as text with value ""\n'
+        '    the database version giving v\n'
+        '    keep ok as whole number with value 0\n'
+        '    keep m as whole number with value 0\n'
+        '    the magnitude of 0 minus 42 giving m\n'
+        '    print the text "abs=" and m\n'
+        'end program\n')
+    outputs = {}
+    for backend in ("c", "cpp", "nim"):
+        if backend == "nim" and shutil.which("nim") is None:
+            continue
+        out_bin = os.path.join(tmp, f"ph_{backend}")
+        r = subprocess.run(
+            [sys.executable, CLI, src, "--backend", backend, "--compile",
+             "--output", out_bin, "--link", "sqlite3"],
+            capture_output=True, text=True, timeout=200, cwd=HERE)
+        if r.returncode != 0:
+            return False, f"[{backend}] phrased call failed: {(r.stdout+r.stderr)[-300:]}"
+        run = _run(out_bin, timeout=20)
+        outputs[backend] = "".join(run.stdout.split())
+        if "abs=42" not in outputs[backend]:
+            return False, f"[{backend}] wrong result: {outputs[backend]!r}"
+    if len(set(outputs.values())) > 1:
+        return False, f"backends DISAGREE on a phrased call: {outputs}"
+
+    # Guards. A phrase whose placeholder count disagrees with the action's
+    # arity would pass the wrong number of arguments SILENTLY.
+    sys.path.insert(0, HERE)
+    from dictumc.parser import Parser
+    from dictumc.lexer import Lexer
+    for bad, why in (
+            ('import from C the action f takes whole number produces whole '
+             'number as f phrased as "do {} and {}"\nprogram p\nend program\n',
+             "arity mismatch"),
+            ('import from C the action g takes whole number produces whole '
+             'number as g phrased as "{} squared"\nprogram p\nend program\n',
+             "leading placeholder")):
+        try:
+            Parser(Lexer(bad).tokenize()).parse()
+            return False, f"a phrase with a {why} was accepted -- it must be rejected"
+        except SyntaxError:
+            pass
+        except Exception:
+            pass
+    return True, f"ok -- phrased FFI calls work and agree across {sorted(outputs)}"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

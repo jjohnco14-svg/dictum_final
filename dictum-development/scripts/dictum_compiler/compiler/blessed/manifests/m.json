@@ -1,0 +1,30 @@
+{
+  "library": "m",
+  "link": [
+    "m"
+  ],
+  "headers": [
+    "math.h"
+  ],
+  "shapes": [],
+  "imports": [
+    {
+      "c_name": "pow",
+      "params": [
+        "decimal number",
+        "decimal number"
+      ],
+      "returns": "decimal number",
+      "alias": "c_pow"
+    }
+  ],
+  "verify": {
+    "body": "    keep r as decimal number with value 0.0\n    call c_pow with 2.0 and 10.0 giving r\n    print the text \"pow=\" and r",
+    "expect_regex": "pow=1024\\.0"
+  },
+  "_verified": {
+    "c": true,
+    "cpp": true,
+    "nim": true
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "library": "expat",
+  "link": [
+    "expat"
+  ],
+  "headers": [
+    "expat.h"
+  ],
+  "shapes": [],
+  "imports": [
+    {
+      "c_name": "XML_ExpatVersion",
+      "params": [],
+      "returns": "text",
+      "alias": "XML_ExpatVersion"
+    }
+  ],
+  "verify": {
+    "body": "    keep v as text with value \"\"\n    call XML_ExpatVersion giving v\n    print the text \"expat=\" and v",
+    "expect_regex": "expat=expat_\\d"
+  },
+  "_verified": {
+    "c": true,
+    "cpp": true,
+    "nim": true
+  }
+}

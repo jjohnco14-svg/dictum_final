@@ -3,8 +3,28 @@
     "c": {
       "blessed": false,
       "note": "output 'v:3.45.1' did not match 'THIS_CAN_NEVER_MATCH_XYZZY'",
-      "recorded_at": "2026-09-12T03:10:40.651247+00:00",
+      "recorded_at": "2026-09-12T03:30:05.564227+00:00",
       "toolchain": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    }
+  },
+  "expat": {
+    "c": {
+      "blessed": true,
+      "note": "ok ('expat=expat_2.6.1')",
+      "recorded_at": "2026-09-12T03:26:12.995490+00:00",
+      "toolchain": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "cpp": {
+      "blessed": true,
+      "note": "ok ('expat=expat_2.6.1')",
+      "recorded_at": "2026-09-12T03:26:13.554665+00:00",
+      "toolchain": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "nim": {
+      "blessed": true,
+      "note": "ok ('expat=expat_2.6.1')",
+      "recorded_at": "2026-09-12T03:26:15.775367+00:00",
+      "toolchain": "Nim Compiler Version 1.6.14 [Linux: amd64]"
     }
   },
   "glfw": {
@@ -27,6 +47,26 @@
       "toolchain": "Nim Compiler Version 1.6.14 [Linux: amd64]"
     }
   },
+  "m": {
+    "c": {
+      "blessed": true,
+      "note": "ok ('pow=1024.000000')",
+      "recorded_at": "2026-09-12T03:26:18.782888+00:00",
+      "toolchain": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "cpp": {
+      "blessed": true,
+      "note": "ok ('pow=1024.000000')",
+      "recorded_at": "2026-09-12T03:26:19.283669+00:00",
+      "toolchain": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "nim": {
+      "blessed": true,
+      "note": "ok ('pow=1024.000000')",
+      "recorded_at": "2026-09-12T03:26:21.590757+00:00",
+      "toolchain": "Nim Compiler Version 1.6.14 [Linux: amd64]"
+    }
+  },
   "openssl": {
     "c": {
       "blessed": true,
@@ -44,6 +84,26 @@
       "blessed": true,
       "note": "ok ('s:1')",
       "recorded_at": "2026-09-11T02:07:59.791435+00:00",
+      "toolchain": "Nim Compiler Version 1.6.14 [Linux: amd64]"
+    }
+  },
+  "pcre2": {
+    "c": {
+      "blessed": true,
+      "note": "ok ('pcre_rc=0')",
+      "recorded_at": "2026-09-12T03:26:16.010237+00:00",
+      "toolchain": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "cpp": {
+      "blessed": true,
+      "note": "ok ('pcre_rc=0')",
+      "recorded_at": "2026-09-12T03:26:16.542969+00:00",
+      "toolchain": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "nim": {
+      "blessed": true,
+      "note": "ok ('pcre_rc=0')",
+      "recorded_at": "2026-09-12T03:26:18.530854+00:00",
       "toolchain": "Nim Compiler Version 1.6.14 [Linux: amd64]"
     }
   },
@@ -91,19 +151,39 @@
     "c": {
       "blessed": true,
       "note": "ok ('v:3.45.1')",
-      "recorded_at": "2026-09-12T03:10:37.792634+00:00",
+      "recorded_at": "2026-09-12T03:30:02.897142+00:00",
       "toolchain": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
     },
     "cpp": {
       "blessed": true,
       "note": "ok ('v:3.45.1')",
-      "recorded_at": "2026-09-12T03:10:38.284795+00:00",
+      "recorded_at": "2026-09-12T03:30:03.364989+00:00",
       "toolchain": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
     },
     "nim": {
       "blessed": true,
       "note": "ok ('v:3.45.1')",
-      "recorded_at": "2026-09-12T03:10:40.416150+00:00",
+      "recorded_at": "2026-09-12T03:30:05.343392+00:00",
+      "toolchain": "Nim Compiler Version 1.6.14 [Linux: amd64]"
+    }
+  },
+  "uuid": {
+    "c": {
+      "blessed": true,
+      "note": "ok ('uuid_ok=1')",
+      "recorded_at": "2026-09-12T03:26:10.285045+00:00",
+      "toolchain": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "cpp": {
+      "blessed": true,
+      "note": "ok ('uuid_ok=1')",
+      "recorded_at": "2026-09-12T03:26:10.811582+00:00",
+      "toolchain": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "nim": {
+      "blessed": true,
+      "note": "ok ('uuid_ok=1')",
+      "recorded_at": "2026-09-12T03:26:12.789678+00:00",
       "toolchain": "Nim Compiler Version 1.6.14 [Linux: amd64]"
     }
   },

@@ -1,0 +1,30 @@
+{
+  "library": "pcre2",
+  "link": [
+    "pcre2-8"
+  ],
+  "headers": [
+    "pcre2.h"
+  ],
+  "shapes": [],
+  "imports": [
+    {
+      "c_name": "pcre2_config_8",
+      "params": [
+        "whole number",
+        "opaque pointer"
+      ],
+      "returns": "whole number",
+      "alias": "pcre2_config"
+    }
+  ],
+  "verify": {
+    "body": "    keep out_v as list of byte with values 0, 0, 0, 0, 0, 0, 0, 0\n    keep rc as whole number with value 0\n    call pcre2_config with 0 and the address of out_v giving rc\n    print the text \"pcre_rc=\" and rc",
+    "expect_regex": "pcre_rc=\\d"
+  },
+  "_verified": {
+    "c": true,
+    "cpp": true,
+    "nim": true
+  }
+}

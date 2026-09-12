@@ -240,6 +240,12 @@ class Parser:
     # Statements
     # ------------------------------------------------------------------
     def parse_statement(self) -> Node:
+        # A registered phrase is tried FIRST: it is an explicit, opt-in
+        # binding the program author wrote, so it should win over the
+        # generic fallbacks below. Matching backtracks cleanly on failure.
+        phrased = self._try_parse_phrase()
+        if phrased is not None:
+            return phrased
         tok = self.cur()
         if tok.type in (TokenType.NUMBER, TokenType.STRING):
             return self.parse_expression()
@@ -1699,9 +1705,87 @@ class Parser:
         alias_parts = [self.expect_word().value]
         _TOP = {'end','program','module','shape','action','use','bind','import','extern','export'}
         while self.cur().type == TokenType.WORD and self.cur().value not in _TOP:
+            if self.cur().value == 'phrased':
+                break
             alias_parts.append(self.advance().value)
+        alias = ' '.join(alias_parts)
+        # DICTATION FOR A FOREIGN FUNCTION:
+        #   import from C the action f takes A and B produces R as f
+        #       phrased as "evaluate {} on {}"
+        # registers a natural-language call form, so the call site reads
+        #   evaluate ctx on tokens giving r
+        # instead of `call f with ctx and tokens giving r`. The whole point
+        # of Dictum is that code reads like language; before this, anything
+        # reached through FFI was excluded from that.
+        if self.cur().type == TokenType.WORD and self.cur().value == 'phrased':
+            self.advance()
+            self.match_word('as')
+            if self.cur().type == TokenType.STRING:
+                template = self.advance().value
+                self._register_phrase(template, alias, len(params))
         return ImportC(action_name=action_name, params=params, ret_type=ret_type,
-                       alias=' '.join(alias_parts), line=line)
+                       alias=alias, line=line)
+
+    # ------------------------------------------------------------------
+    def _register_phrase(self, template: str, target: str, arity: int) -> None:
+        """Turn `evaluate {} on {}` into a matchable token pattern."""
+        if not hasattr(self, "_phrases"):
+            self._phrases = {}
+        parts, holes = [], 0
+        for chunk in template.split():
+            if chunk == "{}":
+                parts.append(None)      # a hole: one expression
+                holes += 1
+            else:
+                parts.append(chunk)
+        if holes != arity:
+            raise SyntaxError(
+                f"phrase {template!r} has {holes} placeholder(s) but the "
+                f"action takes {arity} parameter(s) -- they must match, or a "
+                f"call site would silently pass the wrong number of arguments")
+        if not parts or parts[0] is None:
+            raise SyntaxError(
+                f"phrase {template!r} must begin with a literal word, not a "
+                f"placeholder -- the first word is what makes it recognisable "
+                f"at a call site")
+        self._phrases.setdefault(parts[0], []).append((parts, target))
+
+    def _try_parse_phrase(self):
+        """If the statement starts with a registered phrase word, match it."""
+        phrases = getattr(self, "_phrases", None)
+        if not phrases:
+            return None
+        tok = self.cur()
+        if tok.type != TokenType.WORD or tok.value not in phrases:
+            return None
+        start = self.pos
+        for parts, target in phrases[tok.value]:
+            self.pos = start
+            args, ok = [], True
+            for part in parts:
+                if part is None:
+                    try:
+                        args.append(self.parse_expression())
+                    except Exception:
+                        ok = False
+                        break
+                else:
+                    if not (self.cur().type == TokenType.WORD
+                            and self.cur().value == part):
+                        ok = False
+                        break
+                    self.advance()
+            if ok:
+                call = FuncCall(name=target, args=args, line=tok.line)
+                # `... giving VAR` keeps the existing result convention, so a
+                # phrased call behaves exactly like `call ... giving`.
+                if self.cur().type == TokenType.WORD and self.cur().value == 'giving':
+                    self.advance()
+                    result = self.expect_word().value
+                    return Assignment(target=result, value=call, line=tok.line)
+                return call
+        self.pos = start
+        return None
 
     def parse_import_cpp(self, line: int) -> ImportCpp:
         self.expect_word('the')
@@ -1729,9 +1813,21 @@ class Parser:
         alias_parts = [self.expect_word().value]
         _TOP = {'end','program','module','shape','action','use','bind','import','extern','export'}
         while self.cur().type == TokenType.WORD and self.cur().value not in _TOP:
+            if self.cur().value == 'phrased':
+                break
             alias_parts.append(self.advance().value)
+        alias = ' '.join(alias_parts)
+        # Same `phrased as` clause as import from C -- this is the form that
+        # matters for a big C++ API (llama.cpp, say): bind the function once,
+        # give it a sentence, and every call site downstream reads as Dictum
+        # rather than as foreign glue.
+        if self.cur().type == TokenType.WORD and self.cur().value == 'phrased':
+            self.advance()
+            self.match_word('as')
+            if self.cur().type == TokenType.STRING:
+                self._register_phrase(self.advance().value, alias, len(params))
         return ImportCpp(item_type=item_type, item_name=item_name, params=params,
-                         ret_type=ret_type, alias=' '.join(alias_parts), line=line)
+                         ret_type=ret_type, alias=alias, line=line)
 
     def parse_define(self) -> HandleTypeDecl:
         """`define handle Name` — declares Name as a distinct nominal
