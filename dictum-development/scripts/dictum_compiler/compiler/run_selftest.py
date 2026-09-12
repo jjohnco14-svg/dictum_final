@@ -5601,6 +5601,101 @@ def test_r98_c_callback_from_dictum(tmp):
     return True, "ok -- Dictum action invoked as a C callback on c and cpp"
 
 
+@regression("R99 tools/vocabulary.py (`dictum vocabulary`): the single "
+            "machine-readable artefact unifying grammar keywords, the 92 "
+            "stdlib signatures, and the 10 blessed bindings (HANDOFF.md "
+            "§9.1 -- previously scattered across four places with no "
+            "machine-readable union). Verifies (a) `--json` output is "
+            "actually valid JSON with nothing else on stdout -- the "
+            "inventory sub-check it calls internally prints its own report "
+            "via run_selftest.log(), which would land on the same stdout "
+            "and silently corrupt every consumer parsing the output; (b) "
+            "every count in the artefact is LIVE, not a cached/stale "
+            "number -- cross-checked directly against the real registries "
+            "(grammar.py KEYWORDS, STDLIB_ACTION_FAMILIES, the manifest "
+            "directory listing) so the artefact cannot drift from the code "
+            "it claims to describe; (c) a known keyword, a known stdlib "
+            "entry and a known blessed library are all actually present "
+            "and correctly shaped, not just present in count")
+def test_r99_vocabulary_artefact(tmp):
+    voc = os.path.join(HERE, "tools", "vocabulary.py")
+    if not os.path.exists(voc):
+        return False, "tools/vocabulary.py missing"
+
+    r = subprocess.run([sys.executable, voc, "--json"],
+                        capture_output=True, text=True, timeout=120, cwd=HERE)
+    if r.returncode != 0:
+        return False, f"vocabulary.py --json exited {r.returncode}: {r.stderr[-300:]}"
+    try:
+        data = json.loads(r.stdout)
+    except Exception as e:
+        return False, (f"--json stdout is not valid JSON ({e}) -- something "
+                        f"else is writing to stdout: {r.stdout[:200]!r}")
+
+    for section in ("keywords", "type_words", "stdlib", "blessed_libraries",
+                     "common_mistakes"):
+        if section not in data:
+            return False, f"missing top-level section: {section}"
+        if data[section]["count"] != len(data[section]["items"]):
+            return False, (f"{section}: declared count "
+                            f"{data[section]['count']} != actual item count "
+                            f"{len(data[section]['items'])}")
+
+    # Live cross-check: the artefact's counts must match the real
+    # registries at the moment this test runs, not a value baked in when
+    # vocabulary.py was written.
+    sys.path.insert(0, HERE)
+    from dictumc.grammar import DictumGrammar
+    real_kw_count = len(DictumGrammar.KEYWORDS)
+    if data["keywords"]["count"] != real_kw_count:
+        return False, (f"keywords count {data['keywords']['count']} != live "
+                        f"DictumGrammar.KEYWORDS count {real_kw_count} -- "
+                        f"the artefact has drifted from grammar.py")
+    if data["stdlib"]["count"] != len(STDLIB_ACTION_FAMILIES):
+        return False, (f"stdlib count {data['stdlib']['count']} != live "
+                        f"STDLIB_ACTION_FAMILIES count "
+                        f"{len(STDLIB_ACTION_FAMILIES)}")
+    manifest_dir = os.path.join(HERE, "blessed", "manifests")
+    real_manifest_count = len([f for f in os.listdir(manifest_dir) if f.endswith(".json")])
+    if data["blessed_libraries"]["count"] != real_manifest_count:
+        return False, (f"blessed_libraries count "
+                        f"{data['blessed_libraries']['count']} != live "
+                        f"manifest directory count {real_manifest_count}")
+
+    kw_items = data["keywords"]["items"]
+    if "repeat" not in kw_items or "using" not in kw_items:
+        return False, "expected keywords 'repeat'/'using' not found"
+
+    sqrt_entries = [e for e in data["stdlib"]["items"] if e["name"] == "Math.sqrt"]
+    if not sqrt_entries:
+        return False, "expected stdlib entry 'Math.sqrt' not found"
+    if sqrt_entries[0]["returns"] != "fractional number":
+        return False, f"Math.sqrt return type looks wrong: {sqrt_entries[0]}"
+
+    sqlite_entries = [e for e in data["blessed_libraries"]["items"] if e["library"] == "sqlite3"]
+    if not sqlite_entries:
+        return False, "expected blessed library 'sqlite3' not found"
+    if sqlite_entries[0]["verified"].get("c") is not True:
+        return False, f"sqlite3 not shown verified on c: {sqlite_entries[0]['verified']}"
+    if not sqlite_entries[0]["functions"]:
+        return False, "sqlite3 entry has no functions listed"
+
+    # --section must isolate exactly the one section asked for.
+    r2 = subprocess.run([sys.executable, voc, "--json", "--section", "stdlib"],
+                        capture_output=True, text=True, timeout=60, cwd=HERE)
+    try:
+        sec = json.loads(r2.stdout)
+    except Exception as e:
+        return False, f"--section stdlib --json is not valid JSON: {e}"
+    if "items" not in sec or "keywords" in sec:
+        return False, f"--section did not isolate the requested section: keys={list(sec.keys())}"
+
+    return True, (f"ok -- {data['keywords']['count']} keywords, "
+                   f"{data['stdlib']['count']} stdlib entries, "
+                   f"{data['blessed_libraries']['count']} blessed libraries, "
+                   f"all live-cross-checked against the real registries")
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

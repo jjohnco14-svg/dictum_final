@@ -36,6 +36,13 @@ COMMANDS
     dictum libs
         Show which libraries are blessed, on which targets, so you know
         what you can call before you write the call.
+
+    dictum vocabulary [--json] [--section keywords|type_words|stdlib|blessed_libraries|common_mistakes]
+        One machine-readable artefact unifying every keyword, every
+        stdlib function signature, and every blessed binding -- generated
+        fresh from the real registries every time (never hand-maintained).
+        See tools/vocabulary.py's module docstring for what this does and
+        does not cover.
 """
 from __future__ import annotations
 import argparse
@@ -307,6 +314,12 @@ def cmd_libs(args) -> int:
     return 0
 
 
+def cmd_vocabulary(args) -> int:
+    sys.path.insert(0, HERE)
+    import vocabulary
+    return vocabulary.main(args.vocab_args)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -330,7 +343,19 @@ def main() -> int:
     pl = sub.add_parser("libs")
     pl.set_defaults(func=cmd_libs)
 
-    args = ap.parse_args()
+    pv = sub.add_parser("vocabulary")
+    pv.set_defaults(func=cmd_vocabulary)
+
+    # `vocabulary` forwards its own flags (--json, --section ...) straight
+    # to vocabulary.py's own parser rather than redeclaring them here --
+    # parse_known_args + REMAINDER-via-subparser has real cross-version
+    # argparse quirks, so unknown args are collected at the top level
+    # instead.
+    args, extra = ap.parse_known_args()
+    if getattr(args, "cmd", None) == "vocabulary":
+        args.vocab_args = extra
+    elif extra:
+        ap.error(f"unrecognized arguments: {' '.join(extra)}")
     return args.func(args)
 
 
