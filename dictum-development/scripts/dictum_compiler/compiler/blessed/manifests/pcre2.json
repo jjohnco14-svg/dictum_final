@@ -1,5 +1,8 @@
 {
   "library": "pcre2",
+  "license": "BSD-3-Clause",
+  "license_copyleft": false,
+  "license_note": "BSD 3-Clause license.",
   "link": [
     "pcre2-8"
   ],

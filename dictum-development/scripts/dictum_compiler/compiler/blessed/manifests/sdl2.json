@@ -1,5 +1,8 @@
 {
   "library": "sdl2",
+  "license": "Zlib",
+  "license_copyleft": false,
+  "license_note": "SDL 2.0+ uses the zlib license (SDL 1.2 was LGPL -- not relevant here, this project links SDL2).",
   "link": [
     "SDL2"
   ],

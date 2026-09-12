@@ -1,5 +1,8 @@
 {
   "library": "zlib",
+  "license": "Zlib",
+  "license_copyleft": false,
+  "license_note": "zlib license.",
   "link": [
     "z"
   ],

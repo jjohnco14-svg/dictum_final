@@ -1,5 +1,8 @@
 {
   "library": "glfw",
+  "license": "Zlib",
+  "license_copyleft": false,
+  "license_note": "zlib/libpng license.",
   "link": [
     "glfw"
   ],

@@ -1,5 +1,8 @@
 {
   "library": "uuid",
+  "license": "BSD-3-Clause",
+  "license_copyleft": false,
+  "license_note": "libuuid (part of util-linux) is BSD-3-Clause.",
   "link": [
     "uuid"
   ],

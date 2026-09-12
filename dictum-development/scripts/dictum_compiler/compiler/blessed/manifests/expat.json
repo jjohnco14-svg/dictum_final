@@ -1,5 +1,8 @@
 {
   "library": "expat",
+  "license": "MIT",
+  "license_copyleft": false,
+  "license_note": "MIT license.",
   "link": [
     "expat"
   ],

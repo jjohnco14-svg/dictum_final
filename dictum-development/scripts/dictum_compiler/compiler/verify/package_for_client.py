@@ -92,6 +92,21 @@ def _client_test_report_markdown(pipeline_report: Dict[str, Any], project_name: 
     return "\n".join(lines)
 
 
+def _licenses_markdown(license_rep: Dict[str, Any]) -> Optional[str]:
+    """Third-party library licenses actually linked into this build, with
+    a specific warning if a copyleft-licensed one is statically linked
+    (HANDOFF.md §8.7/§7.3). Returns None (no LICENSES.md at all) when the
+    build links nothing, so a plain single-file program's deliverable
+    isn't cluttered with an empty table."""
+    from license_report import to_markdown
+    if not license_rep["libraries"]:
+        return None
+    lines = ["# Third-Party Licenses", "",
+             "This program links against the following third-party libraries:",
+             "", to_markdown(license_rep)]
+    return "\n".join(lines)
+
+
 def _default_readme(project_name: str, description: str, usage: str) -> str:
     return (
         f"# {project_name}\n\n"
@@ -145,6 +160,19 @@ def package(
             _client_test_report_markdown(pipeline_report, project_name)
         )
 
+        # 3b. third-party license disclosure, when the build actually links
+        # anything (HANDOFF.md §8.7/§7.3) -- omitted entirely for a build
+        # with no linked libraries rather than shipping an empty table.
+        from license_report import report_from_pipeline
+        license_rep = report_from_pipeline(pipeline_report)
+        licenses_md = _licenses_markdown(license_rep)
+        if licenses_md:
+            open(os.path.join(stage, "LICENSES.md"), "w").write(licenses_md)
+        if license_rep["static_copyleft_risk"]:
+            print("WARNING: this is a static build linking a copyleft-licensed "
+                  "library -- see LICENSES.md in the deliverable before shipping.",
+                  file=sys.stderr)
+
         # 4. optional generated source -- .c/.h/.cpp files ONLY, explicitly
         #    never anything ending in .dict, checked file-by-file on the
         #    way in (belt-and-suspenders with the whole-tree guard below).
@@ -169,6 +197,7 @@ def package(
                     zf.write(full, os.path.relpath(full, stage))
 
         return {"ok": True, "output": os.path.abspath(output_zip),
+                "static_copyleft_risk": license_rep["static_copyleft_risk"],
                 "contents": sorted(os.path.relpath(os.path.join(dp, f), stage)
                                     for dp, _d, fs in os.walk(stage) for f in fs)}
 

@@ -1,5 +1,8 @@
 {
   "library": "openssl",
+  "license": "Apache-2.0",
+  "license_copyleft": false,
+  "license_note": "OpenSSL 3.0+ relicensed to Apache License 2.0 (earlier 1.x/1.1 releases used the older dual OpenSSL/SSLeay license -- confirm the linked version if it predates 3.0).",
   "link": [
     "crypto"
   ],

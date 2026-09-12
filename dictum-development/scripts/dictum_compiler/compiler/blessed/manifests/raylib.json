@@ -1,5 +1,8 @@
 {
   "library": "raylib",
+  "license": "Zlib",
+  "license_copyleft": false,
+  "license_note": "zlib/libpng license -- permissive, allows static linking with closed-source software.",
   "link": [
     "raylib",
     "m",

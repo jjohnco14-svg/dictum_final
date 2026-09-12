@@ -154,6 +154,7 @@ import os
 import re
 import shutil
 import subprocess
+import zipfile
 import sys
 import tempfile
 from typing import Optional
@@ -5964,6 +5965,103 @@ def test_r103_structured_errors(tmp):
                         f"forms was flagged: {report['errors']}")
 
     return True, "ok -- repeat/if/produce_failure all enriched correctly, no false positives"
+
+
+@regression("R104 verify/license_report.py + its wiring into "
+            "package_for_client.py -- third-party license disclosure for a "
+            "client deliverable (HANDOFF.md §8.7: 'Shipping a static binary "
+            "linked against GPL code has consequences. Nothing tracks "
+            "license obligations today.' / §7.3: 'License / attribution "
+            "handling'). All 10 blessed/manifests/*.json now carry a real, "
+            "web-search-verified SPDX license id (not asserted from "
+            "memory) plus a copyleft flag. Verifies: (a) a build linking "
+            "nothing gets no LICENSES.md at all -- not an empty table; "
+            "(b) a build linking a real, permissively-licensed blessed "
+            "library (sqlite3, 'blessing'/public-domain) gets a correct, "
+            "non-alarming LICENSES.md and static_copyleft_risk is False; "
+            "(c) a STATIC build linking a copyleft-licensed library (m / "
+            "libm, LGPL-2.1-or-later) is the ONE case that raises the "
+            "warning -- the same library dynamically linked must NOT "
+            "warn, since the real legal distinction is static vs dynamic, "
+            "not merely 'is this library copyleft'; (d) an unlisted/typo'd "
+            "library name is reported UNKNOWN, never silently omitted or "
+            "falsely marked clear")
+def test_r104_license_report(tmp):
+    import dict_triage
+    sys.path.insert(0, os.path.join(HERE, "verify"))
+    import license_report
+    import package_for_client
+
+    # (a)/(b): build a real trivial project once, reuse its binary for
+    # both the no-library and the sqlite3-library cases (only the
+    # pipeline_report's declared 'libraries' list differs -- this test is
+    # about the license-reporting LOGIC, not about actually compiling
+    # against sqlite3, which R35/other tests already cover elsewhere).
+    proj = os.path.join(tmp, "proj")
+    os.makedirs(proj, exist_ok=True)
+    open(os.path.join(proj, "main.dict"), "w").write(
+        'program main\n    print the text "r104 test"\nend program\n'
+    )
+    report = dict_triage.triage_project(proj, expected_output="r104 test", keep_artifacts=True)
+    if report.get("case") != "clean":
+        return False, f"expected a clean triage build: {report}"
+
+    def make_pipeline_report(libraries, static):
+        r = dict(report)
+        r["manifest"] = {**r.get("manifest", {}), "libraries": libraries}
+        r["static_link_check"] = {"ok": True} if static else None
+        return {
+            "project_dir": proj, "guide_b": r, "guide_b_ok": True,
+            "guide_c": None, "guide_c_ok": None, "coverage": None, "coverage_ok": None,
+            "traceability": None, "traceability_ok": None,
+            "overall_ok": True, "stopped_at": None,
+        }
+
+    # (a) no libraries -> no LICENSES.md at all
+    pr_none = make_pipeline_report([], static=False)
+    out_zip = os.path.join(tmp, "none.zip")
+    res = package_for_client.package(pr_none, "r104-none", "d", "u", out_zip)
+    if "LICENSES.md" in res["contents"]:
+        return False, "a build with no linked libraries still got a LICENSES.md"
+
+    # (b) sqlite3 (permissive), not static -> LICENSES.md present, no risk
+    pr_sqlite = make_pipeline_report(["sqlite3"], static=False)
+    out_zip2 = os.path.join(tmp, "sqlite.zip")
+    res2 = package_for_client.package(pr_sqlite, "r104-sqlite", "d", "u", out_zip2)
+    if "LICENSES.md" not in res2["contents"]:
+        return False, "a build linking sqlite3 got no LICENSES.md"
+    if res2["static_copyleft_risk"]:
+        return False, "sqlite3 (permissive, public-domain) incorrectly flagged as a copyleft risk"
+    with zipfile.ZipFile(out_zip2) as zf:
+        licenses_text = zf.read("LICENSES.md").decode()
+    if "sqlite3" not in licenses_text or "blessing" not in licenses_text:
+        return False, f"LICENSES.md doesn't correctly describe sqlite3: {licenses_text!r}"
+
+    # (c) m (LGPL) dynamically linked -> must NOT warn
+    rep_dynamic = license_report.report(["m"], static_link=False)
+    if rep_dynamic["static_copyleft_risk"]:
+        return False, "libm dynamically linked was incorrectly flagged as a static-copyleft risk"
+
+    # (c) m (LGPL) STATICALLY linked -> must warn, and package() must
+    # reflect it in both the returned dict and LICENSES.md's content
+    pr_static_m = make_pipeline_report(["m"], static=True)
+    out_zip3 = os.path.join(tmp, "static_m.zip")
+    res3 = package_for_client.package(pr_static_m, "r104-static-m", "d", "u", out_zip3)
+    if not res3["static_copyleft_risk"]:
+        return False, "static build linking libm (LGPL) was NOT flagged as a copyleft risk"
+    with zipfile.ZipFile(out_zip3) as zf:
+        licenses_text3 = zf.read("LICENSES.md").decode()
+    if "LGPL" not in licenses_text3 or "STATIC" not in licenses_text3.upper():
+        return False, f"LICENSES.md doesn't warn about the static LGPL link: {licenses_text3!r}"
+
+    # (d) unknown/typo'd library -> reported UNKNOWN, not silently dropped
+    rep_unknown = license_report.report(["definitely_not_a_real_lib"], static_link=False)
+    if rep_unknown["libraries"][0]["license"] is not None:
+        return False, f"an unlisted library should report license=None: {rep_unknown}"
+    if not rep_unknown["any_unknown"]:
+        return False, "an unlisted library should set any_unknown=True"
+
+    return True, "ok -- no-library/permissive/static-copyleft/unknown all correctly distinguished"
 
 
 if __name__ == "__main__":

@@ -1,5 +1,8 @@
 {
   "library": "sqlite3",
+  "license": "blessing",
+  "license_copyleft": false,
+  "license_note": "SQLite is released into the public domain by its authors; no attribution or license text required.",
   "link": [
     "sqlite3"
   ],

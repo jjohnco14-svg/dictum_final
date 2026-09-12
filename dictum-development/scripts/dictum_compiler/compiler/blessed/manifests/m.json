@@ -1,5 +1,8 @@
 {
   "library": "m",
+  "license": "LGPL-2.1-or-later",
+  "license_copyleft": true,
+  "license_note": "libm is part of glibc (LGPL-2.1-or-later). Dynamic linking is unrestricted. STATIC linking carries real LGPL obligations (the recipient must be able to relink against a modified glibc) -- see the static-link warning this manifest's license info feeds into `dictum build --static`/package_for_client.py's report.",
   "link": [
     "m"
   ],
