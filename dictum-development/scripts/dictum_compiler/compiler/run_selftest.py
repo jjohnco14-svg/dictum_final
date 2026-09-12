@@ -5833,6 +5833,52 @@ def test_r101_cpp_class_fields(tmp):
     return True, f"ok -- own field, inherited field, and destructor all correct: {out!r}"
 
 
+@regression("R102 Net.*/Thread.* -- registered in STDLIB_ACTION_FAMILIES and "
+            "covered by a C-level runtime-header check, but never verified "
+            "END TO END through a real compiled .dict PROGRAM before this "
+            "(HANDOFF.md §5.4: 'Threads / sockets / TLS never verified "
+            "end-to-end despite being registered'). Real client/server over "
+            "a real loopback TCP socket, with the server side running on a "
+            "genuine pthread spawned via `Thread.start` -- not a synthetic "
+            "C snippet. Confirmed working on C and C++ (Nim skipped: Net.*/"
+            "Thread.*/Mutex.* are honestly among the 52 of 92 stdlib "
+            "functions not yet nim-bridged -- confirmed via `dictum "
+            "vocabulary`'s own nim_available field, an already-known, "
+            "already-documented gap, not a new one found here). Also "
+            "surfaced a real, standalone language-design fact worth "
+            "knowing: there is no module-level global variable syntax "
+            "(`keep X ...` outside any program/action is a hard parse "
+            "error, confirmed by trying it) and `Thread.start` only takes "
+            "a zero-parameter action, so a spawned thread cannot receive "
+            "arguments or share mutable state with its spawner through any "
+            "language-level mechanism -- only through side effects like a "
+            "real OS resource (a socket, a file) that both sides "
+            "independently know how to reach")
+def test_r102_net_thread_end_to_end(tmp):
+    src = os.path.join(HERE, "tests", "netthread", "nettest.dict")
+    if not os.path.exists(src):
+        return False, "tests/netthread/nettest.dict missing"
+    outputs = {}
+    for backend in ("c", "cpp"):
+        out_bin = os.path.join(tmp, f"nettest_{backend}")
+        r = subprocess.run([sys.executable, CLI, src, "--backend", backend,
+                            "--compile", "--output", out_bin],
+                            capture_output=True, text=True, timeout=120, cwd=HERE)
+        if r.returncode != 0:
+            return False, f"[{backend}] build failed: {(r.stdout + r.stderr)[-400:]}"
+        run = _run(out_bin, timeout=20)
+        if run.returncode != 0:
+            return False, f"[{backend}] exited {run.returncode}: {run.stdout!r}"
+        outputs[backend] = "".join(run.stdout.split())
+        if "server_got:ping" not in outputs[backend]:
+            return False, f"[{backend}] server thread never received the client's message: {outputs[backend]!r}"
+        if "client_got:pong" not in outputs[backend]:
+            return False, f"[{backend}] client never received the server thread's reply: {outputs[backend]!r}"
+    if len(set(outputs.values())) > 1:
+        return False, f"backends DISAGREE: {outputs}"
+    return True, f"ok -- real socket send/receive across a real pthread, agreeing on {sorted(outputs)}"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

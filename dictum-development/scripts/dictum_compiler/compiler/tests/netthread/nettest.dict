@@ -1,0 +1,40 @@
+action server_task takes nothing produces nothing
+    keep srv as whole number with value 0
+    call Net.listen with 9999 giving srv
+    keep conn as whole number with value 0
+    call Net.accept with srv giving conn
+    keep msg as text with value ""
+    call Net.receive with conn giving msg
+    print the text "server_got:" and msg
+    keep sent as whole number with value 0
+    call Net.send with conn and "pong" giving sent
+    call Net.close with conn
+    call Net.close with srv
+end action
+
+program main
+    use Net
+    use Thread
+
+    keep t as thread_handle with no value
+    call Thread.start with server_task giving t
+
+    keep sock as whole number with value 0
+    put 0 minus 1 into sock
+    keep tries as whole number with value 0
+    while sock is less than 0 repeat
+        call Net.connect with "127.0.0.1" and 9999 giving sock
+        put tries plus 1 into tries
+        if tries is greater than 2000 then
+            stop repeating
+        end if
+    end while
+
+    keep sentn as whole number with value 0
+    call Net.send with sock and "ping" giving sentn
+    keep reply as text with value ""
+    call Net.receive with sock giving reply
+    print the text "client_got:" and reply
+    call Net.close with sock
+    call Thread.join with t
+end program
