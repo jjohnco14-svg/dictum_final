@@ -2393,3 +2393,77 @@ independently; restored all three afterward.
   assuming the other two backends are fine by default.
 
 Version at time of writing: **0.1.55**.
+
+---
+
+## 35. `Http.*`/`Json.*` end-to-end: one real arity bug, one sandbox red herring (v0.1.56)
+
+Continuing down §34j's "still open" list: `Http.*`/`Json.*`, registered in
+`STDLIB_ACTION_FAMILIES` with a real C-level runtime (a genuine HTTP/1.1
+client, a real JSON parser — both already covered by a synthetic C-level
+behavioral test), but never exercised together through a compiled `.dict`
+PROGRAM before this.
+
+### 35a. The real bug: `Http.post`'s registry entry didn't match its own function
+
+The first program combining `Http.get`, `Json.parse`, and several
+`Json.get_*` accessors against a live local server worked correctly on
+the first try, on both C and C++. `Http.post` did not — it failed to
+*compile*: `dictumc: compile error: too few arguments to function
+'dictum_http_post'`. Root cause: `STDLIB_ACTION_FAMILIES["Http.post"]`
+declared exactly 2 Dictum-level parameters, matching every sibling
+(`Http.put`/`patch`/`post_form` all take exactly `url`+`body` from
+Dictum, with a fixed content-type baked into a dedicated wrapper) — but
+it pointed straight at `dictum_http_post`, the one genuinely-3-argument
+function (`url, body, content_type`) in the whole family. Fixed by
+adding `dictum_http_post_simple(url, body)` to `runtime/dictum_http.h`
+— the identical fixed-content-type wrapper pattern the other three
+already use — and repointing the registry at that, rather than
+changing `Http.post`'s Dictum-facing arity (a breaking, inconsistent
+change) or the real 3-arg function itself (which a hand-written C test
+elsewhere in this suite calls directly with all 3 arguments).
+
+### 35b. A real-looking failure that was purely a test-environment artifact
+
+Before finding 35a, an early manual test run showed every JSON accessor
+returning zero/null (`n=0`, three `item:0`s, `posted=(null)`) even after
+fixing `Http.post` — looking exactly like a second, deeper bug in array
+handling. It wasn't: the local Python test server had died between two
+separate shell invocations (background processes started with `nohup
+... &` do not survive across separate tool calls in this session's
+sandbox, confirmed by checking for the process afterward and finding it
+gone). Running the server start and the client test as one atomic shell
+command produced fully correct output immediately. Recorded here
+because chasing a phantom bug for several steps before checking the
+simplest explanation (is the thing I'm talking to still alive) is
+exactly the kind of self-inflicted debugging detour worth naming, not
+quietly deleting from the record. The permanent regression test (R109)
+avoids this entirely by using `subprocess.Popen` from within the same
+Python test process — the same pattern the pre-existing `test_http`
+behavioral test already used correctly.
+
+### 35c. Verification
+
+R109: a real GET against a live local HTTP server, parsing a real JSON
+response — an object field read as `text`, an integer field, a boolean
+field, an array's length, iterating the array by index — plus a full
+POST round-trip, all on both C and C++, confirming identical, correct
+output. Proven capable of failing: reverted the registry fix, confirmed
+R109 catches the exact "too few arguments" compile failure, restored.
+
+### 35d. Still open
+
+- Struct-by-value FFI (§34) and `Http.*`/`Json.*` (this section) are
+  both now closed. **Multi-file `import_c`/`import_cpp` across all
+  three backends together remains the one item from §33k/§34j's list
+  still genuinely untested.**
+- Everything else unchanged from §34j: 8 reserved stdlib families, Nim
+  bridge at 40/92, `emit_c.py`/`emit_cpp.py` hand-written-twin drift
+  risk (unaffected by this pass — the bug found here was a registry/
+  runtime mismatch, not an emitter-pair divergence), `text` as an
+  `emit-binding` return type still refused, no `--shared` flag on
+  `dictumc_cli.py`, no autonomous spec→verified-code loop, Kaggle
+  monitoring unavailable, full Guide A/B/C skill-bundle redesign not
+  attempted.
+
+Version at time of writing: **0.1.56**.

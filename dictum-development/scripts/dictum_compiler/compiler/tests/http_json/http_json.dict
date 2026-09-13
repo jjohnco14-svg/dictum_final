@@ -1,0 +1,39 @@
+use Http
+use Json
+
+program main
+    keep body as text with value ""
+    call Http.get with "http://127.0.0.1:58974/x" giving body
+
+    keep doc as whole number with value 0
+    call Json.parse with body giving doc
+
+    keep name as text with value ""
+    call Json.get_string with doc and "name" giving name
+    print the text "name=" and name
+
+    keep price as whole number with value 0
+    call Json.get_int with doc and "price" giving price
+    print the text "price=" and price
+
+    keep active as truth value with value 0
+    call Json.get_bool with doc and "active" giving active
+    print the text "active=" and active
+
+    keep n as whole number with value 0
+    call Json.array_length with doc and "items" giving n
+    print the text "n=" and n
+
+    keep i as whole number with value 0
+    repeat 3 times using i
+        keep v as whole number with value 0
+        call Json.get_int_at with doc and "items" and i giving v
+        print the text "item:" and v
+    end repeat
+
+    keep posted as text with value ""
+    call Http.post with "http://127.0.0.1:58974/x" and "hello=world" giving posted
+    print the text "posted=" and posted
+
+    call Json.destroy with doc
+end program

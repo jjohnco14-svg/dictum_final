@@ -232,6 +232,24 @@ static inline dictum_text dictum_http_post(dictum_text url, dictum_text body, di
     return _dictum_http_request("POST", url, body, content_type ? content_type : "text/plain", NULL);
 }
 
+/* BUGFIX: STDLIB_ACTION_FAMILIES' `Http.post` entry declared only 2
+ * Dictum-level params (['text', 'text']), matching every sibling
+ * (Http.put/patch/post_form all take exactly url+body from Dictum, with
+ * their content-type baked in) -- but it pointed straight at
+ * dictum_http_post above, which genuinely needs 3 C arguments. Any
+ * Dictum program calling `Http.post` (as opposed to a hand-written C
+ * test calling dictum_http_post directly with all 3 args) failed to
+ * compile outright: "too few arguments to function 'dictum_http_post'".
+ * Confirmed via the first real .dict program to ever call Http.post at
+ * all. Rather than changing Http.post's Dictum-facing arity (a breaking
+ * change, and inconsistent with every sibling), or changing this real,
+ * genuinely-3-argument function other callers may rely on, add the same
+ * kind of fixed-content-type wrapper Http.put/patch/post_form already
+ * use, and point the registry at THIS instead. */
+static inline dictum_text dictum_http_post_simple(dictum_text url, dictum_text body) {
+    return dictum_http_post(url, body, "text/plain");
+}
+
 static inline dictum_text dictum_http_post_form(dictum_text url, dictum_text form_body) {
     return _dictum_http_request("POST", url, form_body, "application/x-www-form-urlencoded", NULL);
 }

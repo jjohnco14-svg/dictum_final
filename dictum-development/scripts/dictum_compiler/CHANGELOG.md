@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased — `Http.*`/`Json.*` end-to-end: one real arity bug, one sandbox red herring (v0.1.56)
+
+Next off the "still open" list: `Http.*`/`Json.*`, registered with a
+real C-level runtime (a genuine HTTP/1.1 client, a real JSON parser)
+but never exercised together through a compiled `.dict` program before
+this.
+
+The first program combining `Http.get`, `Json.parse`, and several
+`Json.get_*` accessors worked on the first try, on both C and C++.
+`Http.post` did not — it failed to compile: "too few arguments to
+function `dictum_http_post`." Root cause: the registry entry declared
+2 Dictum-level params, matching every sibling (`Http.put`/`patch`/
+`post_form` all take exactly `url`+`body`), but pointed at
+`dictum_http_post`, the one genuinely-3-argument function in the
+family (`url, body, content_type`). Fixed by adding
+`dictum_http_post_simple(url, body)` — the same fixed-content-type
+wrapper pattern the other three already use — rather than changing
+`Http.post`'s arity or the real 3-arg function itself.
+
+Also recorded honestly: an early test run showed every JSON accessor
+returning zero/null, looking like a second, deeper bug — it was a test
+sandbox artifact (the local test server had died between two separate
+shell invocations; background `nohup` processes don't survive across
+tool calls in this environment). Running server-start and client-test
+as one atomic command produced fully correct output immediately. The
+permanent regression test avoids this by using `subprocess.Popen`
+within one Python process, matching the pattern the existing
+`test_http` behavioral test already used correctly.
+
+R109: real GET + JSON parsing (object/int/bool fields, array length,
+indexed access) plus a full POST round-trip, correct and identical on
+C and C++. Proven capable of failing (reverted the fix, confirmed the
+test catches the exact compile failure, restored).
+
+Suite: 110/110 regression, 6/6 behavioral.
+
 ## Unreleased — Module-qualified FFI: 5 real bugs across all 3 backends, one root cause (v0.1.55)
 
 Continuing the bug hunt from the previous entry, next off the "still

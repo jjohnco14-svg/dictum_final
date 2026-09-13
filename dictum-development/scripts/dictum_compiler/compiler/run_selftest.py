@@ -6503,6 +6503,89 @@ def test_r108_module_qualified_ffi(tmp):
     return True, "ok -- struct-by-value and out-parameter both correct on c/cpp/nim"
 
 
+@regression("R109 Http.*/Json.* -- registered in STDLIB_ACTION_FAMILIES and "
+            "the C-level runtime is real (real HTTP/1.1 client, real JSON "
+            "parser), but never verified end-to-end through a compiled "
+            "`.dict` PROGRAM combining both before this. Found one real "
+            "bug immediately: `Http.post`'s registry entry declared only 2 "
+            "Dictum-level params (matching every sibling -- Http.put/patch/"
+            "post_form all take exactly url+body), but pointed straight at "
+            "`dictum_http_post`, which genuinely needs 3 C arguments "
+            "(url, body, content_type) -- so ANY Dictum program calling "
+            "Http.post failed to compile outright ('too few arguments to "
+            "function'), confirmed by writing the first one. Fixed by "
+            "adding `dictum_http_post_simple(url, body)` -- the same "
+            "fixed-content-type wrapper pattern Http.put/patch/post_form "
+            "already use -- and pointing the registry at that instead, "
+            "rather than changing Http.post's Dictum-facing arity (a "
+            "breaking, inconsistent-with-siblings change) or the real, "
+            "genuinely-3-argument function other callers may use directly. "
+            "Verifies a real GET against a live local HTTP server, parsing "
+            "a real JSON response: an object field (text), an integer "
+            "field, a boolean field, an array's length, iterating the "
+            "array by index, and a full POST round-trip -- on both C and "
+            "C++, confirming identical, correct output")
+def test_r109_http_json(tmp):
+    fixture = os.path.join(HERE, "tests", "http_json", "http_json.dict")
+    if not os.path.exists(fixture):
+        return False, "tests/http_json/http_json.dict missing"
+
+    port = 58974
+    server_src = os.path.join(tmp, "srv.py")
+    open(server_src, "w").write(f'''
+import http.server, socketserver
+socketserver.TCPServer.allow_reuse_address = True
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b\'{{"name": "widget", "price": 42, "active": true, "items": [10, 20, 30]}}\')
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0))
+        data = self.rfile.read(n)
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b\'{{"echo": "\' + data + b\'"}}\')
+with socketserver.TCPServer(("127.0.0.1", {port}), H) as httpd:
+    httpd.serve_forever()
+''')
+
+    expected = "name=widgetprice=42active=1n=3item:10item:20item:30posted={\"echo\":\"hello=world\"}"
+    for backend, ext, compiler in (("c", "c", "gcc"), ("cpp", "cpp", "g++")):
+        src_out = os.path.join(tmp, f"http_json_{backend}.{ext}")
+        r = subprocess.run([sys.executable, CLI, fixture, "--backend", backend,
+                            "--output", src_out],
+                            capture_output=True, text=True, timeout=60, cwd=HERE)
+        if r.returncode != 0:
+            return False, f"[{backend}] transpile failed: {(r.stdout + r.stderr)[-300:]}"
+        bin_out = os.path.join(tmp, f"http_json_{backend}")
+        r2 = subprocess.run([compiler, "-std=" + ("c11" if backend == "c" else "c++17"),
+                             "-O2", "-I", os.path.join(HERE, "runtime"), src_out,
+                             "-o", bin_out, "-lm"],
+                             capture_output=True, text=True, timeout=60)
+        if r2.returncode != 0:
+            return False, f"[{backend}] build failed: {r2.stderr[-400:]}"
+
+        server = subprocess.Popen([sys.executable, "-u", server_src],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        try:
+            import time
+            time.sleep(1)
+            run = _run(bin_out, timeout=20)
+        finally:
+            server.kill()
+            server.wait(timeout=3)
+        if run.returncode != 0:
+            return False, f"[{backend}] runtime failure (exit {run.returncode}): {run.stdout!r}"
+        out = "".join(run.stdout.split())
+        if out != expected:
+            return False, f"[{backend}] wrong output: {out!r} (expected {expected!r})"
+
+    return True, "ok -- object fields, array iteration, and a full POST round-trip all correct on c and cpp"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

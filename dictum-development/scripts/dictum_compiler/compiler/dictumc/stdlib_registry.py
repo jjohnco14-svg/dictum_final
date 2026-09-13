@@ -40,7 +40,13 @@ DICTUM_STDLIB_TYPES: Set[str] = {
 STDLIB_ACTION_FAMILIES: dict = {
     # Http (HTTP + HTTPS — auto-routes via dictum_tls for https://)
     "Http.get":              ("dictum_http_get",          ["text"],                    "text"),
-    "Http.post":             ("dictum_http_post",         ["text","text"],              "text"),
+    # BUGFIX: pointed at dictum_http_post (genuinely 3 C args: url, body,
+    # content_type) while declaring only 2 Dictum-level params -- any
+    # Dictum call to Http.post failed to compile ("too few arguments").
+    # dictum_http_post_simple(url, body) is the real 2-arg wrapper added
+    # alongside this fix (runtime/dictum_http.h), matching the same
+    # fixed-content-type pattern Http.put/patch/post_form already use.
+    "Http.post":             ("dictum_http_post_simple",  ["text","text"],              "text"),
     "Http.post_form":        ("dictum_http_post_form",    ["text","text"],              "text"),
     "Http.put":              ("dictum_http_put",          ["text","text"],              "text"),
     "Http.delete":           ("dictum_http_delete",       ["text"],                    "text"),
