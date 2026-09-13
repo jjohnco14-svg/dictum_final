@@ -254,25 +254,38 @@ def topo_sort(file_info: List[Dict]) -> List[Dict]:
 # ── Generate unified Makefile ─────────────────────────────────────────────────
 
 def _guard_shape_typedefs(src: str) -> str:
-    """Wrap each `typedef struct {...} Name;` in a per-shape #ifndef guard.
+    """Wrap each shape struct definition in a per-shape #ifndef guard.
 
     A shape declared in one .dict file is emitted BOTH into that file's own
-    generated C AND into the project-wide dictum_types.h aggregate. The
+    generated code AND into the project-wide dictum_types.h aggregate. The
     defining file doesn't include dictum_types.h directly, but it arrives
-    transitively through any module header it uses -- so the typedef lands
-    twice in one translation unit and gcc rejects it with "conflicting
-    types for 'S3'". Same problem, and same solution, as the per-symbol FFI
-    guards already used here: guard by name so however many paths deliver
-    the definition, only the first one takes effect.
+    transitively through any module header it uses -- so the definition
+    lands twice in one translation unit and the compiler rejects it with
+    "conflicting types for 'S3'" (C) or a redefinition error (C++). Same
+    problem, and same solution, as the per-symbol FFI guards already used
+    here: guard by name so however many paths deliver the definition, only
+    the first one takes effect.
+
+    BUGFIX: only ever recognized C's `typedef struct {...} Name;` form,
+    where the name comes AFTER the closing brace. A C++ plain-data shape
+    (no methods/constructors) emits as `struct Name { ... };` instead --
+    name BEFORE the opening brace -- which this function's own regex
+    couldn't match OR extract a name from, even after the paired
+    extraction-site fix (all_shapes_code) started collecting it. Both
+    forms are now matched, each with the name pulled from its own real
+    position rather than assuming one fixed layout.
     """
     def _wrap(m):
         block = m.group(0)
-        nm = re.search(r'\}\s*(\w+)\s*;', block)
+        nm = re.search(r'\}\s*(\w+)\s*;\s*$', block)  # C: typedef ... } Name;
+        if not nm:
+            nm = re.search(r'^struct\s+(\w+)\s*\{', block)  # C++: struct Name { ...
         if not nm:
             return block
         g = f'DICTUM_SHAPE_{nm.group(1).upper()}_DEFINED'
         return f'#ifndef {g}\n#define {g}\n{block}\n#endif'
-    return re.sub(r'typedef\s+struct\s*\w*\s*\{[^}]+\}\s*\w+\s*;',
+    return re.sub(r'typedef\s+struct\s*\w*\s*\{[^}]+\}\s*\w+\s*;'
+                  r'|struct\s+\w+\s*\{[^}]*\}\s*;',
                   _wrap, src, flags=re.DOTALL)
 
 
@@ -512,6 +525,11 @@ def build_project(
     # by re-reading the transpiler).
     project_modules: set = set()
     project_module_actions: Dict[str, set] = {}
+    # BUGFIX (module-qualified FFI calls, cross-file): see the matching
+    # comment in transpiler.py's StdlibTranspiler.run() for the full
+    # story -- this is the project-wide collection half of that fix,
+    # mirroring project_module_actions immediately above it.
+    project_ffi_aliases: set = set()
 
     for fi in sorted_info:
         try:
@@ -541,6 +559,27 @@ def build_project(
         except Exception:
             pass
 
+        # Walk every node (top-level AND inside a Module body -- exactly
+        # generate_import_c.py's own recommended shape wraps its FFI
+        # imports in a module) collecting the real bound alias for every
+        # ImportC/ImportCpp action -- the same information each file's
+        # own ImportC/ImportCpp handler registers into its OWN
+        # `_ffi_aliases` during emission, just gathered project-wide
+        # ahead of time so a sibling file that only CALLS these names
+        # (never declares them) still resolves them correctly.
+        try:
+            def _collect_ffi_aliases(nodes):
+                for _n in nodes:
+                    if isinstance(_n, _ImportC):
+                        project_ffi_aliases.add(_n.alias or _n.action_name)
+                    elif isinstance(_n, _ImportCpp) and _n.item_type == 'action':
+                        project_ffi_aliases.add(_n.alias)
+                    elif isinstance(_n, _Module):
+                        _collect_ffi_aliases(_n.body)
+            _collect_ffi_aliases(r_pre['ast'])
+        except Exception:
+            pass
+
         # BUGFIX (call...giving type inference, cross-file): collect
         # this file's own Action/ImportC/ImportCpp return types into the
         # project-wide registry. Top-level only (matches how ImportC/
@@ -561,10 +600,31 @@ def build_project(
             pass
 
         if fi['shapes']:
-            # Match: typedef struct { ... } Name;
+            # BUGFIX: only ever matched C's `typedef struct { ... } Name;`
+            # form. C++ shapes with no methods/constructors (a plain
+            # field-holding shape -- the exact common case a cross-file
+            # extern signature references) emit as `struct Name { ... };`
+            # instead -- no `typedef`, name right after `struct`, not
+            # after the closing brace. That form never matched at all, so
+            # `dictum_types.h` came out with zero shapes on the C++
+            # backend for any project where a shape lives in a different
+            # file than the extern that uses it -- confirmed with a real
+            # multi-file build: `dictum_externs.h` correctly declared
+            # `point_distance(Point2D, Point2D)`, but nothing anywhere in
+            # that translation unit had ever defined `Point2D`, a hard
+            # compile error ("'Point2D' was not declared in this scope"),
+            # not a silent wrong answer -- but it made ordinary multi-file
+            # struct-by-value FFI (module in one file, caller in another)
+            # simply not build at all on C++. A C++ shape WITH methods
+            # (`class Name ... { ... };`, see emit_cpp.py's is_class path)
+            # is deliberately still excluded here -- `struct` vs `class`
+            # in the regex is the same signal the emitter itself uses to
+            # tell "plain data shape" from "has behavior", and a
+            # cross-file plain extern signature only ever needs the
+            # former.
             structs = _re.findall(
-
-                r'typedef struct\s*\{[^}]+\}\s*\w+\s*;',
+                r'typedef struct\s*\{[^}]+\}\s*\w+\s*;'
+                r'|struct\s+\w+\s*\{[^}]*\}\s*;',
                 r_pre['code'], _re.DOTALL
             )
             all_shapes_code.extend(structs)
@@ -691,7 +751,8 @@ def build_project(
             # name collision).
             result = t.run(validate=True, extra_shapes=project_shapes, extra_actions=project_actions,
                             extra_local_modules=project_modules, extra_module_actions=project_module_actions,
-                            extra_import_return_types=project_import_return_types)
+                            extra_import_return_types=project_import_return_types,
+                            extra_ffi_aliases=project_ffi_aliases)
         except (SyntaxError, ValidationError) as e:
             errors.append({'file': rel, 'message': str(e), 'line': 0})
             continue

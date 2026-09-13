@@ -1,5 +1,54 @@
 # Changelog
 
+## Unreleased — Multi-file `import from C`: R108 didn't survive crossing a file boundary (v0.1.57)
+
+The last item explicitly named "never stress-tested": a shape + FFI
+imports declared inside `module ... end module` in ONE file (exactly
+`generate_import_c.py`'s own recommended shape), called from a
+SEPARATE file via `use`. It didn't work — R108's single-file fix
+reverted the moment the module and its caller crossed a real file
+boundary, for two reasons, both fresh instances of the exact "state
+that should be project-wide was only ever populated from one file's
+own AST" pattern that caused the original nine-bug cluster.
+
+`_ffi_aliases` (added this session for R108) is populated only when a
+file's own FFI-import nodes are visited — a caller file that only
+`use`s a sibling's FFI imports had an empty set, so call resolution
+silently reverted to the original bug (`geom.point_distance` mangled
+to a symbol nothing declares). Fixed with a project-wide pre-pass
+(`project_ffi_aliases`) threaded through a new `extra_ffi_aliases`
+parameter, mirroring the existing `extra_module_actions` mechanism
+exactly.
+
+Separately: `dictum_types.h` (the project-wide shared-shapes header)
+matched only C's `typedef struct {...} Name;` form when scanning for
+shapes to aggregate — C++'s plain-data-shape form (`struct Name { ...
+};`, no typedef, name in a different position) never matched at all,
+so the aggregate came out completely empty on C++ for any multi-file
+project. A caller with no shapes of its own hit a hard compile error
+the moment it used an FFI signature referencing a shape from a
+different file. Fixed both the extraction regex and the paired
+guard-naming logic to recognize both forms.
+
+Also documented, not a bug: a file named `geom_lib.dict` but
+declaring `module geom` (mismatched names) produces a confusing
+"header not found" error, since `use X` generates its `#include`
+from the literal string X regardless of what module name actually
+lives in that file. The two must match — added to Guide A's `use`
+section directly.
+
+R110: the real fixture builds and runs correctly, with identical
+output, on C, C++, and Nim. Both fixes proven independently capable
+of failing (reverted each, confirmed R110 catches its specific
+failure, restored both).
+
+**Every item named "never stress-tested" since HANDOFF.md arrived is
+now closed**: struct-by-value FFI, `Http.*`/`Json.*`, and multi-file
+`import from C` across all three backends. First time that list has
+been genuinely empty.
+
+Suite: 111/111 regression, 6/6 behavioral.
+
 ## Unreleased — `Http.*`/`Json.*` end-to-end: one real arity bug, one sandbox red herring (v0.1.56)
 
 Next off the "still open" list: `Http.*`/`Json.*`, registered with a

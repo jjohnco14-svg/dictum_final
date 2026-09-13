@@ -6586,6 +6586,98 @@ with socketserver.TCPServer(("127.0.0.1", {port}), H) as httpd:
     return True, "ok -- object fields, array iteration, and a full POST round-trip all correct on c and cpp"
 
 
+@regression("R110 multi-file `import from C` -- a shape + FFI imports "
+            "declared inside a `module ... end module` block in ONE file "
+            "(exactly generate_import_c.py's own recommended output "
+            "shape), called from a SEPARATE file via `use` -- the one "
+            "item explicitly left as 'never stress-tested' after R108 "
+            "closed the single-file version of the same bug class. Found "
+            "2 more real bugs, both instances of the R11-R19 pattern "
+            "('project-wide state that was only ever populated from the "
+            "current file's own AST'): (1) `_ffi_aliases` (added this "
+            "session for R108) is populated only when a file's own "
+            "ImportC/ImportCpp nodes are visited -- a caller file that "
+            "only USES a sibling file's FFI imports had an empty set, so "
+            "the R108 fix's call-site resolution silently reverted to "
+            "the original bug (`geom.point_distance` mangled to a "
+            "symbol nothing declares) the moment the module and its "
+            "caller crossed a file boundary. Fixed with a project-wide "
+            "pre-pass (project_ffi_aliases in project_builder.py) "
+            "threaded through a new extra_ffi_aliases parameter, "
+            "mirroring the existing extra_module_actions mechanism "
+            "exactly. (2) dictum_types.h's (the project-wide shared-"
+            "types aggregate) shape-extraction regex matched ONLY C's "
+            "`typedef struct {...} Name;` form -- C++'s plain-data-shape "
+            "form (`struct Name { ... };`, no typedef, name in a "
+            "different position) never matched at all, so the aggregate "
+            "came out completely empty on C++ for any multi-file "
+            "project, producing a hard compile error "
+            "('Point2D' was not declared in this scope) the moment a "
+            "caller with no shapes of its own tried to use an FFI "
+            "signature referencing a shape from a different file. Fixed "
+            "both the extraction regex and the paired "
+            "_guard_shape_typedefs naming logic to handle both forms. "
+            "Verifies the real multi-file project builds and runs "
+            "correctly, with IDENTICAL output, on C, C++, AND Nim")
+def test_r110_multifile_ffi(tmp):
+    fdir = os.path.join(HERE, "tests", "multifile_ffi")
+    for fname in ("geom_lib.dict", "main.dict", "geom.h", "geom.c"):
+        if not os.path.exists(os.path.join(fdir, fname)):
+            return False, f"tests/multifile_ffi/{fname} missing"
+
+    import shutil as _sh
+    expected = {"c": "distance=5.000000result=14severity=1",
+                "cpp": "distance=5.000000result=14severity=1",
+                "nim": "distance=5.0result=14severity=1"}
+
+    for backend in ("c", "cpp", "nim"):
+        proj = os.path.join(tmp, f"proj_{backend}")
+        os.makedirs(proj)
+        for fname in ("geom_lib.dict", "main.dict", "geom.h", "geom.c"):
+            _sh.copy(os.path.join(fdir, fname), os.path.join(proj, fname))
+        out_dir = os.path.join(proj, "build")
+        r = subprocess.run([sys.executable, PROJECT_BUILDER, proj, "--backend", backend,
+                            "--out", out_dir],
+                            capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            return False, f"[{backend}] project_builder.py failed: {(r.stdout + r.stderr)[-400:]}"
+
+        geom_o = os.path.join(out_dir, "geom_impl.o")
+        rgcc = subprocess.run(["gcc", "-c", os.path.join(proj, "geom.c"), "-o", geom_o],
+                              capture_output=True, text=True, timeout=30)
+        if rgcc.returncode != 0:
+            return False, f"[{backend}] building geom.c failed: {rgcc.stderr[-300:]}"
+
+        if backend in ("c", "cpp"):
+            compiler = "gcc" if backend == "c" else "g++"
+            std = "c11" if backend == "c" else "c++17"
+            main_src = os.path.join(out_dir, "main." + ("c" if backend == "c" else "cpp"))
+            bin_out = os.path.join(out_dir, "demo")
+            rc = subprocess.run([compiler, "-std=" + std, "-O2", "-I", out_dir,
+                                 "-I", os.path.join(HERE, "runtime"), main_src, geom_o,
+                                 "-o", bin_out, "-lm"],
+                                 capture_output=True, text=True, timeout=60)
+            if rc.returncode != 0:
+                return False, f"[{backend}] build failed: {rc.stderr[-500:]}"
+            run = _run(bin_out, timeout=20)
+        else:
+            bin_out = os.path.join(out_dir, "demo_nim")
+            rc = subprocess.run(["nim", "c", "--opt:speed", f"--passL:{geom_o} -lm",
+                                 "-o:" + bin_out, os.path.join(out_dir, "main.nim")],
+                                 capture_output=True, text=True, timeout=90)
+            if rc.returncode != 0:
+                return False, f"[{backend}] build failed: {(rc.stdout + rc.stderr)[-500:]}"
+            run = _run(bin_out, timeout=20)
+
+        if run.returncode != 0:
+            return False, f"[{backend}] runtime failure (exit {run.returncode}): {run.stdout!r}"
+        out = "".join(run.stdout.split())
+        if out != expected[backend]:
+            return False, f"[{backend}] wrong output: {out!r} (expected {expected[backend]!r})"
+
+    return True, "ok -- struct-by-value + out-parameter, module in one file called from another, correct and identical on c/cpp/nim"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

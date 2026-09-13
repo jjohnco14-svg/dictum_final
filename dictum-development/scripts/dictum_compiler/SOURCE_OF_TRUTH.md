@@ -2467,3 +2467,121 @@ R109 catches the exact "too few arguments" compile failure, restored.
   attempted.
 
 Version at time of writing: **0.1.56**.
+
+---
+
+## 36. Multi-file `import from C`: R108 didn't survive crossing a file boundary (v0.1.57)
+
+The last item explicitly named "never stress-tested" on §34j/§35d's
+list: does a shape + FFI imports declared inside `module ... end
+module` in ONE file (§34's fix, exactly `generate_import_c.py`'s own
+recommended output shape), called from a SEPARATE file via `use`,
+actually work? It did not — R108's single-file fix reverted the moment
+the module and its caller crossed a real file boundary, for two
+independent reasons, both fresh instances of the exact bug pattern
+§18 already named and fixed nine times over: "some piece of state that
+should have been project-wide was instead only ever populated from
+THAT ONE FILE'S own AST."
+
+### 36a. `_ffi_aliases` never propagated project-wide
+
+R108's `_ffi_aliases` set (added this very session to fix module-
+qualified FFI call mangling) is populated only when a file's own
+`ImportC`/`ImportCpp` AST nodes are visited during that file's own
+emission. A caller file that only `use`s a sibling file's FFI imports
+(never declares them itself — the entire point of splitting them into
+a library file) has an empty `_ffi_aliases`, so the R108 fix's call-
+resolution check silently found nothing and fell straight back to the
+original bug: `geom.point_distance` mangled to `geom_point_distance`,
+a symbol nothing declares. Confirmed with a real multi-file
+`project_builder.py` build: the generated header correctly declared
+the real, unmangled symbol; the caller file's own call site still said
+the wrong one.
+
+Fixed the same way R17 fixed the identical problem for native module
+actions: a project-wide pre-pass (`project_ffi_aliases` in
+`project_builder.py`, walking every file's AST — including into
+`Module` bodies, since that's exactly where these FFI imports live —
+for `ImportC`/`ImportCpp` nodes) threaded through a new
+`extra_ffi_aliases` parameter on `StdlibTranspiler.run()`, seeding each
+file's own `_ffi_aliases` before its own declarations get added on top.
+
+### 36b. C++'s shared cross-file types header never recognized a C++ shape at all
+
+`dictum_types.h` — the project-wide aggregate of every shape any file
+might need to see, generated so a file with no shapes of its own can
+still resolve a cross-file FFI signature that references one — is
+built by regex-scanning each file's OWN generated code for shape
+definitions. That regex matched exactly one pattern: C's `typedef
+struct {...} Name;`. A C++ plain-data shape (no methods/constructors)
+emits as `struct Name { ... };` instead — no `typedef`, and the name
+comes *before* the opening brace instead of after the closing one.
+That form never matched, at all, on any C++ project — so `dictum_types.h`
+came out completely empty of shapes for a C++ multi-file build, and a
+caller file with no shapes of its own hit a hard compile error the
+moment it tried to use an FFI signature referencing a shape from a
+different file: `'Point2D' was not declared in this scope`. Not a
+silent wrong answer this time, but a real, previously-invisible
+"ordinary multi-file struct-by-value FFI simply doesn't build on
+C++" gap.
+
+Fixed both the extraction regex (now matches either form) and the
+paired `_guard_shape_typedefs` helper, which wraps each shape
+definition in a per-name `#ifndef` guard so it can't be redefined if
+it arrives into one translation unit by more than one path — its own
+name-extraction logic also only knew how to find a name AFTER a
+closing brace, so it needed the identical two-form fix to correctly
+guard the C++ form too, not just recognize it.
+
+### 36c. A real, worth-documenting trap found along the way (not a bug)
+
+While building the test fixture: naming a file `geom_lib.dict` but
+declaring `module geom` inside it (a different name) produces a
+confusing failure — `use geom_lib` generates an `#include
+"dictum_geom_lib.h"` unconditionally from the STRING `geom_lib`,
+regardless of what module name actually lives inside that file, so
+the include target and the header `generate_header()` actually
+produces (named after the real module, `geom`) never match. The fix
+was simply renaming the module to match its file — not a compiler
+bug, but a real, easy-to-hit trap with a misleading error message
+("header not found," not "name mismatch"). Documented directly in
+Guide A's `use` section.
+
+### 36d. Verification
+
+R110: the real fixture (`tests/multifile_ffi/` — a shape and two FFI
+imports in `geom_lib.dict`, called from `main.dict`) builds and runs
+correctly, with identical output, on C, C++, *and* Nim (`distance=5.0`
+in Nim's own formatting; `5.000000` on C/C++, both correct). Both
+fixes proven independently capable of failing: reverted the
+`extra_ffi_aliases` wiring and confirmed R110 catches the exact call-
+mangling regression on C; separately reverted the C++ regex fix and
+confirmed R110 catches the exact "does not name a type" compile
+failure on C++; restored both.
+
+### 36e. Still open
+
+- **Every item explicitly named across §33k/§34j/§35d as "never
+  stress-tested" is now closed**: struct-by-value FFI, `Http.*`/
+  `Json.*`, and multi-file `import from C` across all three backends.
+  This is the first time since the original HANDOFF.md arrived that
+  the "never verified end-to-end" list is genuinely empty — worth
+  naming explicitly, not just letting the list quietly shrink to
+  nothing without comment.
+- Everything else carried forward unchanged: 8 reserved stdlib
+  families, Nim bridge at 40/92, `emit_c.py`/`emit_cpp.py` hand-
+  written-twin drift risk (now six confirmed instances across this
+  session, not counting §36's project_builder.py-level ones — this
+  risk has NOT gone down just because individual instances keep
+  getting fixed; new code keeps being written the same hand-written-
+  twin way), `text` as an `emit-binding` return type still refused, no
+  `--shared` flag on `dictumc_cli.py`, no autonomous spec→verified-
+  code loop, Kaggle monitoring unavailable, full Guide A/B/C skill-
+  bundle redesign not attempted.
+- **With the named list empty, the next round of bug-hunting has no
+  pre-identified target** — per §33k's own conclusion (fuzzing has
+  saturated; real programs keep finding real bugs), the honest move is
+  to keep writing real programs against feature combinations nobody
+  has tried yet, not to manufacture a new list from nothing.
+
+Version at time of writing: **0.1.57**.

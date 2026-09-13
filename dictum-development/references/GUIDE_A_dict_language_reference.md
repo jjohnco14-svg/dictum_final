@@ -1275,6 +1275,19 @@ directory by module name (no file path). This is different from
 `import ModuleName from "path/to/file.dict"` [TRACED], which takes an
 explicit file path — use `use` for same-project modules.
 
+**`ModuleName` must be both the file's name (minus `.dict`) AND the
+name of the `module` declared inside it — the two must match
+[VERIFIED].** `use geom_lib` looks for a sibling file literally named
+`geom_lib.dict` *and* generates its cross-file `#include` against a
+header named after that same string — if the file instead declares
+`module geom` inside it (a different name than its own filename), the
+build fails with a header-not-found error (`dictum_geom_lib.h: No
+such file or directory`) that gives no hint the real problem is a
+name mismatch, not a missing file. Confirmed directly by hitting
+exactly this and fixing it by renaming the module to match its file.
+When in doubt, name the file after the module (or vice versa) before
+troubleshooting anything else about a cross-file `use`.
+
 **`use` now genuinely works end-to-end for shapes, `import from C`
 FFI bindings, and cross-file action calls** — a file that only
 `use`s a shape, an FFI import, or an action defined in a *sibling*
@@ -1282,11 +1295,21 @@ file (never redeclares it itself) validates, compiles, links, and
 runs correctly. This was NOT true before this session (see §18 for
 the full list of what was silently broken and is now fixed and
 covered by regression tests R11–R19 in `compiler/run_selftest.py`).
-If you hit anything that looks like this class of bug again — a
-cross-file reference that should obviously work per this doc but
-doesn't — it's almost certainly a genuine compiler bug, not a mistake
-in your `.dict` source; see §17 for how to verify and §18 for the
-debugging pattern that found all nine of these.
+This now specifically includes a shape AND its FFI imports both
+declared inside a `module ... end module` block in one file (exactly
+`generate_import_c.py`'s own recommended output shape) and called
+from a separate file — verified on C, C++, *and* Nim, and it took two
+more real bugs to get there (R110): the module-qualified call-
+resolution fix from §13's struct-by-value section only worked
+single-file until a project-wide propagation was added, and the C++
+backend's shared cross-file types header didn't recognize a C++
+plain-data shape's own struct syntax at all. If you hit anything that
+looks like this class of bug again — a cross-file reference that
+should obviously work per this doc but doesn't — it's almost
+certainly a genuine compiler bug, not a mistake in your `.dict`
+source; see §17 for how to verify and §18 for the debugging pattern
+that found all nine of the original ones (the same pattern found
+R110's two, a full session later).
 
 ---
 

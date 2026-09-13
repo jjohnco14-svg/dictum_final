@@ -247,7 +247,8 @@ class StdlibTranspiler(Transpiler):
             extra_actions: Optional[Dict[str, Any]] = None,
             extra_local_modules: Optional[set] = None,
             extra_module_actions: Optional[Dict[str, set]] = None,
-            extra_import_return_types: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+            extra_import_return_types: Optional[Dict[str, str]] = None,
+            extra_ffi_aliases: Optional[set] = None) -> Dict[str, Any]:
         from .stdlib_registry import (
             DICTUM_STDLIB_TYPES, STDLIB_ACTION_FAMILIES,
             extend_validator, extend_emitter, detect_stdlib_includes,
@@ -313,6 +314,30 @@ class StdlibTranspiler(Transpiler):
         if extra_module_actions and hasattr(emitter, '_module_actions'):
             for _mod, _acts in extra_module_actions.items():
                 emitter._module_actions.setdefault(_mod, set()).update(_acts)
+        # BUGFIX (module-qualified FFI calls, cross-file -- same root
+        # cause as the _module_actions fix just above, one mechanism
+        # further along): `_ffi_aliases` (added this session to fix
+        # `call geom.point_distance` mangling to a symbol that doesn't
+        # exist -- see emit_c.py/emit_cpp.py's ImportC handlers) is
+        # populated ONLY when this file's own ImportC/ImportCpp AST nodes
+        # are visited during emission. A file that `use`s a module whose
+        # FFI imports live in a SIBLING file (never declares them itself
+        # -- exactly generate_import_c.py's own recommended split, and a
+        # completely ordinary multi-file project shape) has an empty
+        # `_ffi_aliases` for names it only CALLS, so those calls fell
+        # straight back into the blind module-mangling bug the R108 fix
+        # was supposed to have closed -- confirmed with a real multi-file
+        # project_builder.py build: the generated header correctly
+        # declared the real, unmangled symbols, but the CALLER file's
+        # call sites still said `geom_point_distance(...)`, a symbol
+        # nothing declares. Same fix shape as extra_module_actions: seed
+        # from a project-wide pre-pass, real per-file declarations still
+        # win (ImportC/ImportCpp's own handlers still add to this same
+        # set unconditionally during emission).
+        if extra_ffi_aliases:
+            if not hasattr(emitter, '_ffi_aliases'):
+                emitter._ffi_aliases = set()
+            emitter._ffi_aliases.update(extra_ffi_aliases)
         # BUGFIX (call...giving type inference, cross-file): seed the
         # emitter's own return-type registry with the project-wide one
         # BEFORE this file's own nodes are emitted below -- this file's

@@ -1,0 +1,11 @@
+module geom_lib
+
+shape Point2D holds
+    x as f32
+    y as f32
+end shape
+
+import from C the action point_distance takes Point2D and Point2D produces f32 as point_distance
+import from C the action get_status takes i32 and opaque pointer produces i32 as get_status
+
+end module
