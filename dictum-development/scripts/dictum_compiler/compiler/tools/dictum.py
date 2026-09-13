@@ -43,6 +43,15 @@ COMMANDS
         fresh from the real registries every time (never hand-maintained).
         See tools/vocabulary.py's module docstring for what this does and
         does not cover.
+
+    dictum emit-binding KERNEL.dict --lib ./libkernel.so --out kernel_binding.py
+        Generates a Python ctypes binding for a compiled Dictum kernel
+        (the Python-orchestrates/Dictum-verifies split), with argtypes
+        derived from the same type registry the C/C++ emitters use and
+        keyword-only Python wrappers -- so a same-typed-argument swap at
+        the ABI boundary becomes a clear TypeError instead of a silent
+        wrong answer. Refuses (clearly, per-action) anything outside its
+        verified-safe scope: see tools/emit_binding.py's module docstring.
 """
 from __future__ import annotations
 import argparse
@@ -320,6 +329,12 @@ def cmd_vocabulary(args) -> int:
     return vocabulary.main(args.vocab_args)
 
 
+def cmd_emit_binding(args) -> int:
+    sys.path.insert(0, HERE)
+    import emit_binding
+    return emit_binding.main(args.binding_args)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -346,14 +361,18 @@ def main() -> int:
     pv = sub.add_parser("vocabulary")
     pv.set_defaults(func=cmd_vocabulary)
 
-    # `vocabulary` forwards its own flags (--json, --section ...) straight
-    # to vocabulary.py's own parser rather than redeclaring them here --
-    # parse_known_args + REMAINDER-via-subparser has real cross-version
-    # argparse quirks, so unknown args are collected at the top level
-    # instead.
+    pe2 = sub.add_parser("emit-binding")
+    pe2.set_defaults(func=cmd_emit_binding)
+
+    # `vocabulary`/`emit-binding` forward their own flags straight to
+    # their own parsers rather than redeclaring them here -- parse_known_args
+    # + REMAINDER-via-subparser has real cross-version argparse quirks, so
+    # unknown args are collected at the top level instead.
     args, extra = ap.parse_known_args()
     if getattr(args, "cmd", None) == "vocabulary":
         args.vocab_args = extra
+    elif getattr(args, "cmd", None) == "emit-binding":
+        args.binding_args = extra
     elif extra:
         ap.error(f"unrecognized arguments: {' '.join(extra)}")
     return args.func(args)

@@ -1,0 +1,7 @@
+module Pricing
+    action apply_discount takes amount as fractional number and pct as fractional number produces fractional number
+        keep out as fractional number with value 0.0
+        put amount times pct into out
+        return out
+    end action
+end module

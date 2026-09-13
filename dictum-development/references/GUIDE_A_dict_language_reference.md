@@ -112,6 +112,88 @@ Before generating any code, write:
   checklist is a status report grounded in real verification, not a
   todo list marked done by intention.
 
+### Phase 1b — the language boundary, when this project splits across languages
+
+Not every project is pure Dictum, and it shouldn't have to be. The
+real split that works: **Python for orchestration/I/O/AI glue** (its
+ecosystem wins there — nobody wants to write argument parsing or an
+LLM call in Dictum), **Dictum for the logic that must be verified and
+byte-reproducible** (native, auditable, `dictum check` across 3
+backends), **C/C++ via `import from C`/`C++`** for device/library
+access Dictum doesn't reimplement. Dictum doesn't have to win the
+whole application — only the part where a wrong answer is expensive.
+That's a smaller, more defensible claim than "write everything in
+Dictum," and it's the one this section makes reviewable instead of a
+vibe.
+
+**Only add this section if the project actually spans more than one
+language.** A pure-Dictum project skips it entirely — don't manufacture
+a language boundary that isn't there.
+
+Append a `## Language Boundary` section to `SOURCE_OF_TRUTH_<project>.md`,
+one `### block: NAME` per file or logical unit:
+
+```
+## Language Boundary
+
+### block: pricing_kernel
+- language: dictum
+- file: pricing_kernel.dict
+- exposes: calculate_tariff, is_valid_rate
+- rationale: pricing logic — must be auditable and byte-reproducible
+  across backends; a wrong answer here costs the client money.
+- verified_by: dictum check (3 backends agree); dictum emit-binding
+  (boundary signature can't hand-drift from the compiled kernel)
+
+### block: orchestrator
+- language: python
+- file: orchestrator.py
+- rationale: CLI glue and argument parsing; no verification requirement
+  beyond it calling the kernel correctly.
+- verified_by: integration test only
+```
+
+- **`language:`** — `dictum`, `python`, `c`, `cpp`, or another real
+  language name. Not a preference — a decision the rest of this
+  section justifies.
+- **`file:`** — the actual file this block is (or will be), relative
+  to the project root. `verify/language_boundary_check.py` checks this
+  path really exists.
+- **`exposes:`** — **only for a `language: dictum` block that another
+  language calls into.** A comma-separated list of the Dictum action
+  names the boundary actually crosses. This is the checkable part:
+  `language_boundary_check.py` doesn't just trust this list — it
+  parses `file:` for real and confirms each named action (a) exists,
+  and (b) is actually bindable by `dictum emit-binding` (a plain
+  scalar signature — see `tools/emit_binding.py`'s module docstring
+  for the exact scope). Claiming an action is exposed when it takes a
+  `text` return or a container type is caught here, not discovered
+  later when the binding generator silently skips it.
+- **`rationale:`** — why THIS language for THIS block. This is what
+  makes "which language?" a reviewable decision instead of a vibe — a
+  reviewer (human or AI) can disagree with a rationale; they can't
+  meaningfully disagree with a bare language tag.
+- **`verified_by:`** — what actually checks this block is correct.
+  For a `dictum` block that's crossed by `exposes:`, always name BOTH
+  the block's own correctness check (`dictum check`, a Guide C
+  manifest entry, etc.) AND the boundary check (`dictum emit-binding`)
+  — being individually correct on each side of a language boundary
+  doesn't mean the two sides agree at the ABI (see `tools/
+  emit_binding.py`'s module docstring for a real, reproduced example:
+  two same-typed arguments silently swapped at a hand-written ctypes
+  call site returned a confidently wrong number, no crash, no
+  warning). A block with no real check gets `verified_by: none yet` —
+  written down, not silently absent.
+
+Run `python3 verify/language_boundary_check.py --source-of-truth
+SOURCE_OF_TRUTH_<project>.md --project .` after writing this section
+(and again whenever a `dictum` block's exposed actions change) — same
+discipline as `guide_a_coverage_check.py` for the roadmap: it fails
+loudly on a `file:` that doesn't exist or an `exposes:` claim that
+doesn't hold, instead of that gap sitting invisible until an
+orchestration script calls a binding that was never actually generated
+or that silently dropped a function.
+
 ### Phase 2 — write the Guide C test manifest
 
 Append a `## Guide C Test Manifest` section to the same

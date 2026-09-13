@@ -6109,6 +6109,236 @@ def test_r105_generic_actions(tmp):
     return True, f"ok -- 4 real instantiations (2 int, 1 float, 1 text) correct: {out!r}"
 
 
+@regression("R106 tools/emit_binding.py (`dictum emit-binding`) -- generates "
+            "a Python ctypes binding for a compiled Dictum kernel with "
+            "argtypes/restype derived from the SAME type_registry.py table "
+            "the C/C++ emitters use, plus KEYWORD-ONLY Python wrappers. "
+            "Motivated by a real, reproduced silent-wrong-answer scenario "
+            "(the Python-orchestrates/Dictum-verifies split's actual risk): "
+            "a hand-written ctypes argtypes list for calculate_tariff("
+            "weight_kg, distance_km, rate_class) with weight_kg and "
+            "distance_km SWAPPED at the call site -- both c_double, so "
+            "ctypes accepts it -- silently returned 112.8 instead of the "
+            "correct 14.25, no crash, no warning. Verifies end-to-end, not "
+            "just the generator in isolation: real .dict source -> real "
+            "compiled .so -> generated binding -> imported and called from "
+            "a real Python process, confirming (a) a plain numeric kernel "
+            "binds and returns the exact correct answer; (b) a MODULE-"
+            "SCOPED action's mangled symbol name (`Module_action`, the "
+            "same convention emit_c.py/emit_cpp.py use) is matched exactly "
+            "-- a wrong guess here would silently call the wrong symbol or "
+            "crash with 'symbol not found'; (c) `truth value` (bool) binds "
+            "and returns correctly; (d) a `text`-RETURNING action in the "
+            "same file is refused with a clear per-action message while "
+            "the other actions in that file still bind -- one unsupported "
+            "action must not block the rest; (e) the generated wrapper is "
+            "actually keyword-only -- a positional call is a hard "
+            "TypeError, which is the real fix: the swap bug above is no "
+            "longer silent once arguments must be named")
+def test_r106_emit_binding(tmp):
+    fdir = os.path.join(HERE, "tests", "polyglot")
+    tools_dir = os.path.join(HERE, "tools")
+    emit_binding = os.path.join(tools_dir, "emit_binding.py")
+    if not os.path.exists(emit_binding):
+        return False, "tools/emit_binding.py missing"
+
+    def build_so(dict_src, so_out):
+        c_out = so_out[:-3] + ".c"
+        r = subprocess.run([sys.executable, CLI, dict_src, "--backend", "c",
+                            "--output", c_out],
+                            capture_output=True, text=True, timeout=60, cwd=HERE)
+        if r.returncode != 0:
+            return None, f"transpile failed: {(r.stdout + r.stderr)[-300:]}"
+        runtime_dir = os.path.join(HERE, "runtime")
+        r2 = subprocess.run(["gcc", "-std=c11", "-O2", "-fPIC", "-shared",
+                             "-I", runtime_dir, c_out, "-o", so_out, "-lm"],
+                             capture_output=True, text=True, timeout=60)
+        if r2.returncode != 0:
+            return None, f"gcc -shared failed: {r2.stderr[-300:]}"
+        return so_out, None
+
+    # (a) plain numeric kernel -- exact correct answer
+    tariff_src = os.path.join(fdir, "tariff.dict")
+    so1, err = build_so(tariff_src, os.path.join(tmp, "libtariff.so"))
+    if err:
+        return False, f"[tariff] {err}"
+    binding1 = os.path.join(tmp, "tariff_binding.py")
+    r = subprocess.run([sys.executable, emit_binding, tariff_src,
+                        "--lib", so1, "--out", binding1],
+                        capture_output=True, text=True, timeout=30, cwd=HERE)
+    if r.returncode != 0:
+        return False, f"[tariff] emit-binding failed: {(r.stdout + r.stderr)[-300:]}"
+    sys.path.insert(0, tmp)
+    try:
+        import importlib
+        tariff_mod = importlib.import_module("tariff_binding")
+        got = tariff_mod.calculate_tariff(weight_kg=10.0, distance_km=100.0, rate_class=2)
+        if abs(got - 14.25) > 1e-9:
+            return False, f"[tariff] wrong answer: {got} (expected 14.25)"
+        # (e) positional call must be rejected -- the actual point of this tool
+        try:
+            tariff_mod.calculate_tariff(10.0, 100.0, 2)
+            return False, "[tariff] positional call was NOT rejected -- wrapper isn't keyword-only"
+        except TypeError:
+            pass
+    finally:
+        sys.modules.pop("tariff_binding", None)
+
+    # (b) module-scoped action -- mangled symbol name must match exactly
+    mod_src = os.path.join(fdir, "module_scoped.dict")
+    so2, err = build_so(mod_src, os.path.join(tmp, "libmod.so"))
+    if err:
+        return False, f"[module_scoped] {err}"
+    binding2 = os.path.join(tmp, "mod_binding.py")
+    r = subprocess.run([sys.executable, emit_binding, mod_src,
+                        "--lib", so2, "--out", binding2],
+                        capture_output=True, text=True, timeout=30, cwd=HERE)
+    if r.returncode != 0:
+        return False, f"[module_scoped] emit-binding failed: {(r.stdout + r.stderr)[-300:]}"
+    bt = open(binding2).read()
+    if "_lib.Pricing_apply_discount" not in bt:
+        return False, f"[module_scoped] wrong/missing mangled symbol name in binding: {bt}"
+    try:
+        mod_mod = importlib.import_module("mod_binding")
+        got2 = mod_mod.apply_discount(amount=200.0, pct=0.9)
+        if abs(got2 - 180.0) > 1e-9:
+            return False, f"[module_scoped] wrong answer: {got2} (expected 180.0)"
+    finally:
+        sys.modules.pop("mod_binding", None)
+
+    # (c)/(d) bool binds correctly; text-returning action is refused, others still bind
+    mixed_src = os.path.join(fdir, "mixed_text_and_bool.dict")
+    so3, err = build_so(mixed_src, os.path.join(tmp, "libmixed.so"))
+    if err:
+        return False, f"[mixed] {err}"
+    binding3 = os.path.join(tmp, "mixed_binding.py")
+    r = subprocess.run([sys.executable, emit_binding, mixed_src,
+                        "--lib", so3, "--out", binding3],
+                        capture_output=True, text=True, timeout=30, cwd=HERE)
+    if r.returncode != 0:
+        return False, f"[mixed] emit-binding failed: {(r.stdout + r.stderr)[-300:]}"
+    if "greet" not in r.stderr or "text" not in r.stderr:
+        return False, (f"[mixed] the text-returning action 'greet' was not "
+                        f"clearly refused: stderr={r.stderr!r}")
+    bt3 = open(binding3).read()
+    if "def greet(" in bt3:
+        return False, "[mixed] 'greet' (text return) should have been skipped, not bound"
+    if "def is_valid_rate(" not in bt3 or "def calculate_tariff(" not in bt3:
+        return False, ("[mixed] the two SAFE actions in the same file should "
+                        "still be bound despite 'greet' being refused")
+    try:
+        mixed_mod = importlib.import_module("mixed_binding")
+        if mixed_mod.is_valid_rate(rate_class=3) is not True:
+            return False, "[mixed] is_valid_rate(3) should be True"
+        if mixed_mod.is_valid_rate(rate_class=0) is not False:
+            return False, "[mixed] is_valid_rate(0) should be False"
+    finally:
+        sys.modules.pop("mixed_binding", None)
+
+    return True, ("ok -- numeric kernel exact, module-mangled symbol exact, "
+                   "bool correct, text-return refused without blocking siblings, "
+                   "positional call rejected")
+
+
+@regression("R107 verify/language_boundary_check.py + the full Guide A §0 "
+            "Phase 1b workflow it validates -- Python-orchestrates/Dictum-"
+            "verifies as a reviewable, checkable SOURCE_OF_TRUTH decision, "
+            "not just a vibe. A `## Language Boundary` section's "
+            "`exposes:` claim is cross-checked against REAL emit_binding.py "
+            "behavior (reusing its own action-collection/scope logic, "
+            "never a re-implementation that could quietly diverge from it). "
+            "Verifies end-to-end, not just the checker in isolation: a real "
+            "fixture (tests/polyglot/pricing_example/) whose SOURCE_OF_TRUTH "
+            "claims two exposed actions, both of which actually exist and "
+            "are bindable -- checker reports OK, then the full real "
+            "workflow (transpile -> gcc -shared -> dictum emit-binding -> "
+            "import in a real Python orchestrator) produces the exact "
+            "correct tariff (14.25). Also proves the checker's NEGATIVE "
+            "case with a real repro: an `exposes:` claim naming an action "
+            "that does not exist in the file is caught with a specific, "
+            "actionable message, not a generic failure")
+def test_r107_language_boundary_check(tmp):
+    fdir = os.path.join(HERE, "tests", "polyglot", "pricing_example")
+    sot = os.path.join(fdir, "SOURCE_OF_TRUTH_pricing_example.md")
+    checker = os.path.join(HERE, "verify", "language_boundary_check.py")
+    if not os.path.exists(sot) or not os.path.exists(checker):
+        return False, "pricing_example fixture or language_boundary_check.py missing"
+
+    # (a) the real, correct fixture must report OK
+    r = subprocess.run([sys.executable, checker, "--source-of-truth", sot,
+                        "--project", fdir, "--json"],
+                        capture_output=True, text=True, timeout=30, cwd=HERE)
+    if r.returncode != 0:
+        return False, f"checker reported NEEDS ATTENTION on a correct fixture: {r.stdout}"
+    report = json.loads(r.stdout)
+    if not report["ok"]:
+        return False, f"checker's own JSON says not ok: {report}"
+
+    # (b) the real end-to-end workflow this format exists to enable
+    work = os.path.join(tmp, "pricing_work")
+    os.makedirs(work)
+    kernel_src = os.path.join(fdir, "pricing_kernel.dict")
+    kernel_c = os.path.join(work, "pricing_kernel.c")
+    r2 = subprocess.run([sys.executable, CLI, kernel_src, "--backend", "c",
+                        "--output", kernel_c],
+                        capture_output=True, text=True, timeout=60, cwd=HERE)
+    if r2.returncode != 0:
+        return False, f"transpile failed: {(r2.stdout + r2.stderr)[-300:]}"
+    so_path = os.path.join(work, "libpricing_kernel.so")
+    r3 = subprocess.run(["gcc", "-std=c11", "-O2", "-fPIC", "-shared",
+                         "-I", os.path.join(HERE, "runtime"), kernel_c, "-o", so_path, "-lm"],
+                         capture_output=True, text=True, timeout=60)
+    if r3.returncode != 0:
+        return False, f"gcc -shared failed: {r3.stderr[-300:]}"
+    binding_path = os.path.join(work, "pricing_kernel_binding.py")
+    r4 = subprocess.run([sys.executable, os.path.join(HERE, "tools", "emit_binding.py"),
+                         kernel_src, "--lib", so_path, "--out", binding_path],
+                         capture_output=True, text=True, timeout=30, cwd=HERE)
+    if r4.returncode != 0:
+        return False, f"emit-binding failed: {(r4.stdout + r4.stderr)[-300:]}"
+    sys.path.insert(0, work)
+    try:
+        import importlib
+        pk = importlib.import_module("pricing_kernel_binding")
+        got = pk.calculate_tariff(weight_kg=10.0, distance_km=100.0, rate_class=2)
+        if abs(got - 14.25) > 1e-9:
+            return False, f"end-to-end workflow gave the wrong answer: {got} (expected 14.25)"
+        if pk.is_valid_rate(rate_class=2) is not True:
+            return False, "is_valid_rate(2) should be True"
+    finally:
+        sys.modules.pop("pricing_kernel_binding", None)
+
+    # (c) the negative case: exposes: naming an action that doesn't exist
+    bad_dir = os.path.join(tmp, "bad_example")
+    os.makedirs(bad_dir)
+    open(os.path.join(bad_dir, "kernel.dict"), "w").write(
+        'action real_fn takes n as whole number produces whole number\n'
+        '    return n\n'
+        'end action\n'
+    )
+    open(os.path.join(bad_dir, "SOURCE_OF_TRUTH_bad.md"), "w").write(
+        "# bad\n\n## Language Boundary\n\n"
+        "### block: k\n"
+        "- language: dictum\n"
+        "- file: kernel.dict\n"
+        "- exposes: real_fn, totally_made_up_fn\n"
+        "- rationale: test\n"
+        "- verified_by: none yet\n"
+    )
+    r5 = subprocess.run([sys.executable, checker,
+                        "--source-of-truth", os.path.join(bad_dir, "SOURCE_OF_TRUTH_bad.md"),
+                        "--project", bad_dir, "--json"],
+                        capture_output=True, text=True, timeout=30, cwd=HERE)
+    if r5.returncode == 0:
+        return False, "checker did not catch a nonexistent exposed action"
+    bad_report = json.loads(r5.stdout)
+    problems = bad_report["blocks"][0]["problems"]
+    if not any("totally_made_up_fn" in p for p in problems):
+        return False, f"error message doesn't name the bad action: {problems}"
+
+    return True, "ok -- correct fixture passes end-to-end, nonexistent exposed action caught by name"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

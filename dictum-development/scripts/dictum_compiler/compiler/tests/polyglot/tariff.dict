@@ -1,0 +1,11 @@
+action calculate_tariff takes weight_kg as fractional number and distance_km as fractional number and rate_class as whole number produces fractional number
+    keep base as fractional number with value 0.0
+    put weight_kg times 0.75 into base
+    keep distance_fee as fractional number with value 0.0
+    put distance_km times 0.02 into distance_fee
+    put base plus distance_fee into base
+    if rate_class is equal to 2 then
+        put base times 1.5 into base
+    end if
+    return base
+end action

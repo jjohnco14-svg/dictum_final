@@ -1,0 +1,18 @@
+action calculate_tariff takes weight_kg as fractional number and distance_km as fractional number and rate_class as whole number produces fractional number
+    keep base as fractional number with value 0.0
+    put weight_kg times 0.75 into base
+    return base
+end action
+
+action greet takes name as text produces text
+    keep msg as text with value "hi"
+    return msg
+end action
+
+action is_valid_rate takes rate_class as whole number produces truth value
+    keep ok as truth value with value 0
+    if rate_class is greater than 0 then
+        put 1 into ok
+    end if
+    return ok
+end action
