@@ -229,6 +229,22 @@ class NimEmitter:
             return self.type_to_nim(dt[4:])
         if dt.startswith("move "):
             return self.type_to_nim(dt[5:])
+        # BUGFIX (same bug class as the C/C++ backends' equivalent fixes):
+        # a module-qualified shape reference (`geom.Point2D`, for a shape
+        # declared inside `module geom ... end module`) fell straight
+        # through to `_TYPE_MAP.get(dt, dt)` unresolved -- and since Nim's
+        # own syntax also uses `.` for module-qualified access, the
+        # verbatim string `geom.Point2D` LOOKS like valid Nim (accessing
+        # type Point2D from a real Nim module `geom`), so this failed
+        # only at Nim-compile time, not at Dictum-transpile time:
+        # "undeclared identifier: 'geom'" -- there is no real Nim module
+        # named after a Dictum `module` block. A shape is emitted as a
+        # plain top-level Nim `type Point2D = object`, unqualified,
+        # regardless of which Dictum module declared it -- resolve to
+        # that bare name, mirroring emit_c.py's _resolve_final_type_name
+        # and emit_cpp.py's _strip_module_qualifier.
+        if "." in dt:
+            dt = dt.rsplit(".", 1)[-1]
         return _TYPE_MAP.get(dt, dt)
 
     def _zero_value(self, nim_type: str) -> str:
@@ -460,6 +476,23 @@ class NimEmitter:
                     proc_name, imports, src = hit
                     self._stdlib_used[node.name] = (proc_name, imports, src)
                     return f"{proc_name}({', '.join(args)})"
+                # BUGFIX (same bug class as the C/C++ backends' equivalent
+                # fixes): a dotted call to an `import from C`/`C++`
+                # binding declared INSIDE a `module ... end module` block
+                # (`geom.point_distance`, exactly generate_import_c.py's
+                # own recommended output shape) fell through to being
+                # emitted VERBATIM as `geom.point_distance(...)` -- which
+                # Nim's own syntax also uses `.` for module-qualified
+                # access, so this looked like valid Nim (call proc
+                # point_distance from module geom) right up until Nim
+                # itself rejected it: "undeclared identifier: 'geom'"
+                # (there is no real Nim module by that name). self._ffi_sigs
+                # is already keyed by the bare alias name regardless of
+                # which Dictum module declared it -- check that before
+                # falling through to the verbatim (and wrong) dotted form.
+                suffix = node.name.rsplit(".", 1)[-1]
+                if suffix in self._ffi_sigs:
+                    return f"{suffix}({', '.join(args)})"
             return f"{node.name}({', '.join(args)})"
         if isinstance(node, NewExpr):
             args = []

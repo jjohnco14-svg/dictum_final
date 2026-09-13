@@ -2216,3 +2216,180 @@ integrated into the real pipeline.
   three-document structure; it did not restructure them.
 
 Version at time of writing: **0.1.54**.
+
+---
+
+## 34. Module-qualified FFI: 5 real bugs across all 3 backends, one root cause (v0.1.55)
+
+Continuing the bug hunt from §33 by picking the next item off §33k's "still
+open" list — struct-by-value FFI. The first real struct-by-value round trip
+ever run against `generate_import_c.py`'s own recommended output shape
+(shapes and `import from C` declarations wrapped in `module ... end module`)
+found five real bugs, all independent instances of the SAME root cause:
+code assuming a Dictum module's shapes/FFI-imports get scope-mangled the
+same way the module's own NATIVE actions do. They don't, on any backend —
+a shape's struct/type name and an FFI binding's real symbol are never
+module-mangled at their own declaration/definition.
+
+### 34a. C — module-qualified FFI call resolved to a symbol that doesn't exist
+
+`call geom.point_distance` (an `import from C ... as point_distance`
+declared inside `module geom`) mangled to `geom_point_distance` — a
+symbol that was never declared, since the extern declaration itself is
+correctly unmangled. Root cause: `type_semantics.resolve_call_name`'s
+dotted-name branch checked `module_call_map` (the stdlib table) and then
+fell straight to `name.replace(".", "_")`, never checking `ffi_aliases`
+for the dotted case at all (the check existed, but only for the
+UNqualified case). Fixed by checking the suffix against `ffi_aliases`
+before the blind-mangle fallback.
+
+### 34b. C — module-qualified shape TYPE reference emitted as literal, invalid C
+
+`geom.Point2D` (a shape declared inside `module geom`) fell through
+`emit_c.py`'s `type_to_c`'s final fallback, which only replaced spaces,
+never dots — emitted the literal string `geom.Point2D a;`, a hard gcc
+syntax error. Shape struct names are never module-mangled at their own
+definition (confirmed: a shape named `Point2D` inside `module geom`
+still emits plain `typedef struct {...} Point2D;`, no prefix). Fixed by
+stripping a module-qualification prefix in the final fallback,
+mirroring the space-strip already there.
+
+### 34c. SHARED — fixed-width type aliases were entirely missing from the semantic table
+
+`_DICTUM_KIND` (the table `kind_of`/`printf_spec`/`is_numeric` all
+consult) had zero entries for `i8`/`i16`/`i32`/`i64`/`u8`/`u16`/`u32`/
+`u64`/`f32`/`f64` — the exact aliases `generate_import_c.py` deliberately
+uses for byte-accurate struct fields (documented in its own module
+docstring). `printf_spec('f32')` silently returned `None`. Confirmed as
+**live undefined behavior**, not a cosmetic wrong digit: a real `f32`
+struct field printed via `%d` produced `mid_x=0` instead of the correct
+`mid_x=1.500000`. Fixed by adding all ten aliases to `_DICTUM_KIND` —
+lands on both emitters and every caller of the shared table at once,
+not just the one call site that happened to surface it.
+
+### 34d. C++ — `_ffi_aliases` was never populated anywhere in this emitter
+
+The C backend's own fix for 34a (R18, "the FFI-alias guard") never made
+it into `emit_cpp.py` at all — confirmed by grep: `getattr(self,
+'_ffi_aliases', ())` was READ in `_resolve_call_name`, but nothing in
+the entire file ever WROTE to it. Both `ImportC` and `ImportCpp` node
+handlers now register the bound alias, the same way `emit_c.py` already
+does for `ImportC`.
+
+### 34e. C++ — five call sites assumed a Dictum module maps to a real C++ namespace
+
+`type_name.replace('.', '::')` appeared at five separate call sites
+(type resolution, `NewExpr` construction, smart-pointer assignment ×2),
+all on the theory that `module geom` produces `namespace geom { ... }`.
+It doesn't, anywhere in this emitter — the only real namespace ever
+emitted is `self.namespace`, a single whole-*program* `--namespace` CLI
+option, unrelated to individual Dictum modules. Confirmed with a real
+g++ error: `'geom' does not name a type`. Added one shared
+`_strip_module_qualifier` helper (mirroring 34b's fix) and replaced all
+five sites — a single fix point instead of five independently-drifting
+copies of the same wrong assumption.
+
+### 34f. Nim — the same two bugs (type + call resolution), same root cause
+
+`type_to_nim`'s final fallback (`_TYPE_MAP.get(dt, dt)`) never stripped
+dots either — but Nim's OWN syntax also uses `.` for module-qualified
+access, so `geom.Point2D` looked like *valid Nim* (accessing type
+`Point2D` from a real Nim module `geom`) right up until Nim itself
+rejected it: `undeclared identifier: 'geom'`. Same story for the call
+site (`geom.point_distance(...)`, emitted verbatim). Both fixed the
+same way as C/C++: strip the qualifier for types; for calls, check the
+suffix against `self._ffi_sigs` (already populated with the bare alias
+name) before falling through to the verbatim dotted form.
+
+### 34g. `generate_import_c.py` itself was stale, in the same way Guide A was in §33c
+
+The tool's own module docstring still said "Dictum's opaque pointer
+can't take the address of a local variable, per Guide A" — true when
+written, wrong since `the address of` was added (R83, §32-era work),
+and never updated when that landed. The actual classification logic
+matched the stale claim: any pointer-to-primitive out-parameter was
+unconditionally flagged `needs_wrapper`, scaffolding an unnecessary C
+wrapper stub for something Dictum can now bind directly. Fixed:
+
+- A pointer-to-primitive (int/float/bool/short/long/**enum**) out-param
+  is now classified as directly bindable (`opaque pointer`), with a
+  generated `# NOTE (parameter '...')` comment explaining the calling
+  convention (`the address of a local '<type>' variable`).
+- Found and fixed a second bug *while* fixing the first: for a pointee
+  whose spelling isn't itself a recognized C primitive (a custom
+  `typedef enum {...} SomeBool`, exactly raygui.h's own
+  `RAYGUI_STANDALONE` fallback bool), the note fell back to the raw
+  C spelling as if it were a real Dictum type to declare a variable
+  as. It isn't — confirmed directly (`keep x as r45_bool ...` is not
+  valid Dictum) — only its real underlying scalar type is (`i32`,
+  confirmed working end-to-end for the enum case). Fixed by deriving
+  the recommended type from the pointee's *canonical* clang kind, not
+  its spelling.
+- Per-**parameter** notes (as opposed to the return-type note) were
+  computed by `map_type()` but silently discarded by the rendering
+  loop — the classification fix would have shipped correct but mute,
+  with no indication in the generated file of how to actually call the
+  now-directly-bindable function. Fixed to render both.
+- Two EXISTING regression tests (R23, R45) asserted the old,
+  now-obsolete behavior ("must NOT be bound directly," "must need a
+  wrapper") — updated both to assert the current, correct behavior,
+  same discipline as the doc fixes: fix the staleness, don't paper
+  over it by reverting the underlying correctness fix.
+
+### 34h. Verification
+
+R108: a real third-party static library (`geom.c`/`geom.h`, a
+struct-by-value distance/midpoint pair plus a scalar out-parameter
+function), the exact `module ... end module` shape
+`generate_import_c.py` itself produces, compiled and linked for real on
+all three backends. Struct-by-value pass AND return both verified
+(`distance=5.000000`/`5.0`, `mid_x=1.500000`/`1.5`,
+`mid_y=2.000000`/`2.0` — C/C++ vs. Nim's own float formatting), plus
+the out-parameter case bound via `the address of` with no hand-written
+shim (`result=14 severity=1`) — all three backends agreeing. All fixes
+proven capable of failing: re-broke the C call-resolution fix and
+confirmed R108 caught it; re-broke the `generate_import_c.py`
+classification fix and confirmed R23 and R45 both caught it
+independently; restored all three afterward.
+
+### 34i. Honest notes
+
+- **A single real program can surface a whole CLUSTER of related bugs
+  at once when the underlying assumption is shared** — five bugs, one
+  root cause, found by one test program, not five separate hunts. Worth
+  remembering: fixing the FIRST instance of a bug shape is a strong
+  signal to immediately check every other emitter/table for the exact
+  same assumption, not just move on.
+- **A fix can itself introduce a fresh, smaller bug the same session**
+  — the enum-out-param note recommending a nonexistent type (`'r45_bool'`)
+  was caught only by actually trying to USE the generated guidance, not
+  by reading the code and assuming it looked right.
+- **Updating a stale regression test is not the same as weakening it.**
+  R23/R45 asserted real, specific, correct behavior — for the compiler
+  as it existed when they were written. Keeping them passing by
+  reverting the classification fix would have been reintroducing the
+  exact staleness this whole pass exists to close; updating their
+  assertions to the current correct behavior, with the reasoning
+  written into the test itself, is the right move, not a shortcut.
+
+### 34j. Still open
+
+- **Struct-by-value FFI is now closed** (this section) — removed from
+  the open list. **Multi-file `import_c`/`import_cpp` across all three
+  backends together, and the `Http.*`/`Json.*` stdlib families, remain
+  unverified end-to-end** — unchanged from §33k.
+- Everything else in §33k is unchanged this pass: 8 reserved stdlib
+  families, Nim bridge at 40/92, `emit_c.py`/`emit_cpp.py` still
+  hand-written twins (this pass added a fifth confirmed drift instance
+  to that risk, on top of the two from §33d), `text` as an
+  `emit-binding` return type still refused, no `--shared` flag on
+  `dictumc_cli.py`, no autonomous spec→verified-code loop, Kaggle
+  monitoring still unavailable, full Guide A/B/C skill-bundle redesign
+  still not attempted.
+- **New, worth tracking**: this pass found bugs by checking whether an
+  already-fixed assumption (module scope-mangling) had silently
+  recurred elsewhere. That's a real technique, not just luck — worth
+  doing again the next time any single-backend fix lands, before
+  assuming the other two backends are fine by default.
+
+Version at time of writing: **0.1.55**.

@@ -18,12 +18,22 @@ memory) and emits:
   2. `import from C the action ... as ...` lines for every function
      whose signature is directly bindable (no real out-parameters).
   3. A clearly-separated list of functions that need a hand-written C
-     wrapper first (because they take a real out-parameter -- `int*`,
-     `bool*`, `float*`, etc. -- and Dictum's `opaque pointer` can't
-     take the address of a local variable, per Guide A). For each of
-     these, a scaffolded wrapper stub is emitted into a companion .c
-     file, converting the out-parameter to a return value -- the same
-     pattern already used successfully for raygui's `GuiToggleGroup`.
+     wrapper first -- genuinely needed for: a struct/union OUT-parameter
+     (a pointer to something other than a plain scalar), a function
+     whose return type isn't representable at all, or multiple/nested
+     out-parameters. A pointer-to-PRIMITIVE out-parameter (`int*`,
+     `bool*`, `float*`, etc.) is directly bindable via Dictum's `the
+     address of` operator (R83/R108) and needs NO wrapper -- classified
+     as directly bindable, with a `# NOTE (parameter '...')` comment in
+     the generated file explaining the calling convention. (This
+     docstring previously said the opposite -- "Dictum's opaque pointer
+     can't take the address of a local variable" -- which was true when
+     originally written but has been wrong since `the address of` was
+     added; fixed together with the classification logic itself once
+     the staleness was noticed.) For whatever genuinely still needs a
+     wrapper, a scaffolded stub is emitted into a companion .c file,
+     converting the out-parameter to a return value -- the same pattern
+     already used successfully for raygui's `GuiToggleGroup`.
 
 Usage:
   python3 generate_import_c.py raygui.h --module-name raygui_bridge \
@@ -131,9 +141,46 @@ def map_type(cindex, clang_type, struct_registry, header_path):
                              cindex.TypeKind.BOOL, cindex.TypeKind.SHORT,
                              cindex.TypeKind.USHORT, cindex.TypeKind.LONG,
                              cindex.TypeKind.ULONG, cindex.TypeKind.ENUM):
-            # A pointer to a primitive is a real out-parameter -- Dictum
-            # can't take the address of a local variable to satisfy this.
-            return None, True, False, f"out-param pointer to {pointee_spelling}"
+            # BUGFIX: this used to unconditionally classify a pointer to a
+            # primitive as `needs_wrapper` ("Dictum's opaque pointer can't
+            # take the address of a local variable"). That was true when
+            # this comment was written, but `the address of X` has existed
+            # since R83 specifically to solve exactly this case -- verified
+            # directly against a real out-parameter function (`get_status
+            # (whole number, opaque pointer) -> whole number`, bound with
+            # no wrapper at all: `call get_status with code and the
+            # address of severity giving result`, correct output
+            # confirmed) -- see Guide A's struct-by-value/module-FFI
+            # section and R108. A pointer-to-primitive out-parameter is
+            # DIRECTLY bindable now: `opaque pointer` in the signature,
+            # with the caller passing `the address of` a local variable of
+            # the matching Dictum primitive type. No wrapper, no
+            # scaffolded C, no manual fill-in.
+            dictum_pointee = C_TO_DICTUM_PRIMITIVE.get(pointee_spelling, pointee_spelling)
+            # BUGFIX (found immediately after fixing the classification
+            # above, before this had shipped anywhere): for a pointee
+            # whose SPELLING isn't itself a recognized C primitive name
+            # (a custom `typedef enum {...} SomeBool;`, e.g. raygui's own
+            # RAYGUI_STANDALONE fallback bool -- see R45), the note fell
+            # back to the raw spelling ('SomeBool') as if it were a real
+            # Dictum type to declare a local variable as. It isn't --
+            # confirmed directly: `keep x as r45_bool ...` is not valid
+            # Dictum, only its real underlying scalar type is (`i32`,
+            # confirmed working end-to-end for an enum out-parameter).
+            # Derive the guidance from the CANONICAL kind instead of the
+            # spelling, which is robust to any custom typedef name.
+            _CANONICAL_KIND_TO_DICTUM = {
+                cindex.TypeKind.BOOL: "truth value",
+                cindex.TypeKind.FLOAT: "f32", cindex.TypeKind.DOUBLE: "f64",
+                cindex.TypeKind.SHORT: "i16", cindex.TypeKind.USHORT: "u16",
+                cindex.TypeKind.LONG: "i64", cindex.TypeKind.ULONG: "u64",
+                cindex.TypeKind.INT: "i32", cindex.TypeKind.UINT: "u32",
+                cindex.TypeKind.ENUM: "i32",  # enums are int-sized in practice; confirmed working
+            }
+            dictum_pointee = _CANONICAL_KIND_TO_DICTUM.get(pointee_canonical_kind, dictum_pointee)
+            return ("opaque pointer", False, False,
+                    f"out-parameter: pass `the address of` a local "
+                    f"'{dictum_pointee}' variable -- no wrapper needed (R83/R108)")
         return "opaque pointer", False, False, f"pointer to {pointee_spelling} -- verify manually, may need a wrapper"
 
     if kind == cindex.TypeKind.RECORD:
@@ -270,7 +317,18 @@ def emit_dict(result, module_name, header_path):
         else:
             lines.append(f"import from C the action {name} takes nothing produces {ret} as {alias}")
         if note:
-            lines.append(f"    # NOTE: {note}")
+            lines.append(f"    # NOTE (return value): {note}")
+        # BUGFIX: per-PARAMETER notes (e.g. "out-parameter: pass `the
+        # address of` a local 'whole number' variable") were computed by
+        # map_type() but silently discarded here -- only the return
+        # type's note ever made it into the generated file. An
+        # out-parameter binding now looks identical to any other
+        # directly-bindable function with no indication of how to
+        # actually call it, which defeats the point of fixing the
+        # classification itself (see map_type's out-parameter branch).
+        for pname, _ptype, _cspelling, _is_struct, pnote in params:
+            if pnote:
+                lines.append(f"    # NOTE (parameter '{pname}'): {pnote}")
     lines.append("")
 
     if result.wrapper_needed:

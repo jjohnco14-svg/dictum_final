@@ -862,6 +862,30 @@ class CEmitter:
             if t.endswith(suffix):
                 t = t[:-len(suffix)].strip()
                 break
+        return self._resolve_final_type_name(t)
+
+    def _resolve_final_type_name(self, t: str) -> str:
+        """Final fallback for a type name that reached here unresolved by
+        any of type_to_c's earlier cases -- almost always either a plain
+        Dictum primitive alias or a user-defined shape name.
+
+        BUGFIX: a module-qualified shape reference (`geom.Point2D`, for a
+        shape declared inside `module geom ... end shape ... end module`)
+        used to fall through to a bare `t.replace(" ", "_")`, which only
+        touches spaces -- the dot survived untouched, emitting the literal,
+        invalid C `geom.Point2D a;`. Shape struct names are NEVER
+        module-mangled at their own definition site (confirmed: a shape
+        named `Point2D` inside `module geom` still emits as plain
+        `typedef struct {...} Point2D;`, no `geom_` prefix) -- the mangling
+        that DOES apply to module-scoped actions/imports (see
+        type_semantics.resolve_call_name) simply doesn't apply to shapes.
+        So a module-qualified type reference should resolve to the SAME
+        bare struct name a same-file reference to it already would -- take
+        the part after the last dot before the final lookup, mirroring the
+        equivalent fix for call names.
+        """
+        if "." in t:
+            t = t.rsplit(".", 1)[-1]
         return self.types.get(t, t.replace(" ", "_"))
 
     # ------------------------------------------------------------------
@@ -2505,8 +2529,29 @@ class CEmitter:
             # bare shape name "Shape" -- strip the pointer suffix so the
             # lookup still hits instead of silently falling back to "%d".
             shape_name = shape_name.rstrip('*').strip()
+            # BUGFIX (same bug class, a second real instance): a variable
+            # declared with a MODULE-QUALIFIED shape type (`keep m as
+            # geom.Point2D ...`, for a shape from generate_import_c.py's
+            # own recommended module-wrapped output) has declared_vars[p.obj]
+            # == "geom.Point2D" verbatim, but self.shapes is keyed by the
+            # bare "Point2D" (shapes are never module-mangled -- see
+            # type_to_c's _resolve_final_type_name for the equivalent fix
+            # on the declaration side). The lookup missed silently, falling
+            # through to "%d" for a real `f32` field -- confirmed as
+            # undefined behavior at runtime (a float passed where %d reads
+            # an int), not just a cosmetic wrong digit.
+            if '.' in shape_name:
+                shape_name = shape_name.rsplit('.', 1)[-1]
             if shape_name in self.shapes:
                 field_type = self.shapes[shape_name].get(p.field, '')
+                # SHARED SEMANTICS first (same principle as the Identifier
+                # branch above): covers every real Dictum type, including
+                # the fixed-width aliases (f32/f64/i8.../u8...) that the
+                # narrower checks below never covered.
+                shared = _type_sem.printf_spec(field_type)
+                if shared is not None:
+                    return "%zu" if field_type == "size_t" else (
+                           "%lld" if field_type in ("int64_t", "uint64_t") else shared)
                 if 'fractional' in field_type or 'decimal' in field_type: return "%f"
                 if field_type == 'text': return "%s"
                 if field_type == 'truth value': return "%d"

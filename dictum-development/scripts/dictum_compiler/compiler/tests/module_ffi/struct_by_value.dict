@@ -1,0 +1,28 @@
+module geom
+
+shape Point2D holds
+    x as f32
+    y as f32
+end shape
+
+import from C the action point_distance takes Point2D and Point2D produces f32 as point_distance
+import from C the action point_midpoint takes Point2D and Point2D produces Point2D as point_midpoint
+
+end module
+
+program main
+    keep a as geom.Point2D with no value
+    set x of a to 0.0
+    set y of a to 0.0
+    keep b as geom.Point2D with no value
+    set x of b to 3.0
+    set y of b to 4.0
+
+    keep d as f32 with value 0.0
+    call geom.point_distance with a and b giving d
+    print the text "distance=" and d
+
+    keep m as geom.Point2D with no value
+    call geom.point_midpoint with a and b giving m
+    print the text "mid_x=" and x of m and "mid_y=" and y of m
+end program

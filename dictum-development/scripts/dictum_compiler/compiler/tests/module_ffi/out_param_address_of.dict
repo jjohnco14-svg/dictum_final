@@ -1,0 +1,8 @@
+import from C the action get_status takes whole number and opaque pointer produces whole number as get_status
+
+program main
+    keep severity as whole number with no value
+    keep result as whole number with value 0
+    call get_status with 7 and the address of severity giving result
+    print the text "result=" and result and "severity=" and severity
+end program

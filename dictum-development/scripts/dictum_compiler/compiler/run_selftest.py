@@ -1680,7 +1680,7 @@ def test_r22_sized_types_f64_i16(tmp):
     return True, "ok"
 
 
-@regression("R23 generate_import_c.py: real bridge-generation tool produces correct output for a direct binding, a struct-by-value shape, and an out-param function needing a wrapper")
+@regression("R23 generate_import_c.py: real bridge-generation tool produces correct output for a direct binding, a struct-by-value shape, and a pointer-to-primitive out-parameter (bound DIRECTLY via `the address of`, no wrapper -- updated for R83/R108: this used to assert the out-parameter needed a wrapper, which was correct before `the address of` existed and is now the exact stale-test failure mode this project's own discipline says to fix, not paper over)")
 def test_r23_generate_import_c(tmp):
     os.makedirs(tmp, exist_ok=True)
     header = os.path.join(tmp, "sample.h")
@@ -1714,10 +1714,21 @@ def test_r23_generate_import_c(tmp):
         return False, f"expected a direct binding for demo_add, got:\n{content}"
     if "import from C the action demo_scale takes Point and f32 produces f32 as demo_scale" not in content:
         return False, f"expected demo_scale to bind Point by value and f32 (not decimal number) for the real C float, got:\n{content}"
-    if "demo_pick" not in content or "wrapper" not in content.lower():
-        return False, f"expected demo_pick (real int* out-param) to be flagged as needing a wrapper, not bound directly, got:\n{content}"
-    if "import from C the action demo_pick" in content:
-        return False, f"demo_pick has a real out-parameter and must NOT be bound directly, got:\n{content}"
+    # BUGFIX-driven update (R83/R108): `demo_pick`'s `int *active` used to
+    # be classified as needing a hand-written wrapper -- correct BEFORE
+    # `the address of` existed, wrong afterward (Dictum can now take the
+    # address of a local variable, confirmed end-to-end by R108). This
+    # test used to assert the OLD, now-obsolete behavior; updated to
+    # assert the current, correct one rather than reverting the fix.
+    if "import from C the action demo_pick takes Point and opaque pointer produces nothing as demo_pick" not in content:
+        return False, (f"expected demo_pick (a pointer-to-int out-param) to be "
+                        f"bound DIRECTLY now (`the address of` exists -- R83/R108), "
+                        f"not flagged as needing a wrapper, got:\n{content}")
+    if "NOTE (parameter 'active')" not in content or "the address of" not in content:
+        return False, (f"expected a NOTE comment on demo_pick's out-parameter "
+                        f"explaining the `the address of` calling convention, got:\n{content}")
+    if "Needs a wrapper first" in content:
+        return False, f"no function in this header should need a wrapper anymore, got:\n{content}"
     return True, "ok"
 
 
@@ -2967,19 +2978,22 @@ end program
 
 @regression("R45 generate_import_c.py: a bool* out-param that resolves to an ENUM canonical "
             "type (raygui.h's own RAYGUI_STANDALONE fallback `typedef enum{false,true}bool`, "
-            "not C99 _Bool) is still classified as needing a wrapper, not silently bound "
-            "directly as an opaque pointer")
+            "not C99 _Bool) is bound DIRECTLY via `the address of` (R83/R108), with a NOTE "
+            "recommending the correct underlying Dictum type ('i32', not the enum's own "
+            "typedef name -- 'r45_bool' is not a real Dictum type, confirmed by trying it; "
+            "the note used to fall back to the raw C spelling verbatim, which would have "
+            "given exactly that wrong, unusable guidance the moment this out-param "
+            "classification changed). Updated for R83/R108, same as R23: this used to "
+            "assert the enum out-param needed a wrapper, correct before `the address of` "
+            "existed, stale after")
 def test_r45_generate_import_c_enum_bool_outparam(tmp):
     # Found bridging the real raygui.h with --define RAYGUI_STANDALONE (the
     # tool's own documented usage example): under that define, raygui's
     # bool is `typedef enum { false, true } bool;`, an ENUM, not _Bool. A
     # `bool *active` parameter (e.g. real GuiToggle, GuiCheckBox) then
     # resolves with pointee.kind == TypeKind.ENUM after canonical
-    # resolution, which the out-param check didn't cover -- these got
-    # silently classified as "directly bindable" via `opaque pointer`,
-    # which isn't actually callable from Dictum (no address-of a local
-    # var) -- a confident-looking wrong answer instead of the correct
-    # "needs a wrapper" flag every other primitive out-param gets.
+    # resolution, which the out-param check didn't cover at the time this
+    # test was written.
     os.makedirs(tmp, exist_ok=True)
     header = os.path.join(tmp, "enumbool.h")
     open(header, "w").write(
@@ -2999,10 +3013,21 @@ def test_r45_generate_import_c_enum_bool_outparam(tmp):
             return None, "libclang not installed — run: pip install libclang --break-system-packages"
         return False, f"generate_import_c.py failed: {r.stdout}\n{r.stderr}"
     content = open(out_dict).read()
-    if "import from C the action r45_toggle" in content:
-        return False, f"r45_toggle has an enum-typed out-param and must NOT be bound directly:\n{content}"
-    if "r45_toggle" not in content or "wrapper" not in content.lower():
-        return False, f"expected r45_toggle to be flagged as needing a wrapper, got:\n{content}"
+    # BUGFIX-driven update (R83/R108): an enum-backed out-param is now
+    # bound DIRECTLY, same as any other pointer-to-primitive.
+    if "import from C the action r45_toggle takes i32 and text and opaque pointer produces nothing as r45_toggle" not in content:
+        return False, (f"expected r45_toggle to be bound DIRECTLY now "
+                        f"(`the address of` exists -- R83/R108), got:\n{content}")
+    if "Needs a wrapper first" in content:
+        return False, f"no function in this header should need a wrapper anymore, got:\n{content}"
+    # The note must recommend a REAL Dictum type (the enum's underlying
+    # i32), never the enum's own typedef name -- 'r45_bool' is not valid
+    # Dictum, confirmed by trying to declare a variable of that type.
+    if "'r45_bool'" in content:
+        return False, (f"note recommends the enum's own typedef name as if it "
+                        f"were a real Dictum type -- it isn't, got:\n{content}")
+    if "'i32'" not in content:
+        return False, f"expected the note to recommend the real underlying type 'i32', got:\n{content}"
     return True, "ok"
 
 
@@ -6337,6 +6362,145 @@ def test_r107_language_boundary_check(tmp):
         return False, f"error message doesn't name the bad action: {problems}"
 
     return True, "ok -- correct fixture passes end-to-end, nonexistent exposed action caught by name"
+
+
+@regression("R108 module-qualified FFI (`import from C`/`C++` declared "
+            "inside `module ... end module` -- exactly generate_import_c.py's "
+            "own recommended output shape) -- 5 real bugs found across all "
+            "3 backends by the first real struct-by-value FFI round-trip "
+            "ever run, all independent instances of the SAME root cause: "
+            "code assuming a Dictum module's shapes/FFI-imports get "
+            "scope-mangled the same way the module's own NATIVE actions "
+            "do, when they don't (a shape's struct/type name and an FFI "
+            "binding's real symbol are never module-mangled at their own "
+            "declaration/definition, on any backend). (1) C: "
+            "type_semantics.resolve_call_name's dotted-name branch never "
+            "checked ffi_aliases before blindly mangling -- `call "
+            "geom.point_distance` became a symbol (`geom_point_distance`) "
+            "that was never declared. (2) C: emit_c.py's final type-name "
+            "fallback only stripped spaces, never dots -- `geom.Point2D` "
+            "emitted as literal, invalid C. (3) SHARED: `_DICTUM_KIND` was "
+            "missing every fixed-width type alias (f32/f64/i8.../u8...) "
+            "entirely -- the exact aliases generate_import_c.py itself "
+            "uses for byte-accurate struct fields -- so printf_spec() "
+            "returned None for them and a real f32 field printed via %d: "
+            "CONFIRMED UNDEFINED BEHAVIOR, not a cosmetic wrong digit "
+            "(mid_x printed 0 instead of the correct 1.5). (4) C++: "
+            "self._ffi_aliases was NEVER populated anywhere in emit_cpp.py "
+            "-- the C backend's own R18 fix never made it to this emitter. "
+            "(5) C++: five call sites did `type_name.replace('.', '::')` "
+            "assuming a Dictum module maps to a real C++ namespace; no "
+            "code anywhere ever emits such a namespace, confirmed by a "
+            "real g++ error ('geom' does not name a type). Nim needed the "
+            "same two fixes independently (type_to_nim's fallback, and "
+            "FuncCall's dotted-name resolution using the existing "
+            "_ffi_sigs table) -- Nim's own module-dot syntax made the bug "
+            "look like valid Nim right up until nim itself rejected it "
+            "('undeclared identifier'). Verifies both a struct-by-value "
+            "round trip (pass-by-value AND return-by-value) and an "
+            "out-parameter bound directly via `the address of X` -- no "
+            "hand-written C shim -- on all three backends, confirming "
+            "identical, correct output everywhere")
+def test_r108_module_qualified_ffi(tmp):
+    fdir = os.path.join(HERE, "tests", "module_ffi")
+    for fname in ("geom.h", "geom.c", "struct_by_value.dict", "out_param_address_of.dict"):
+        if not os.path.exists(os.path.join(fdir, fname)):
+            return False, f"tests/module_ffi/{fname} missing"
+
+    # Build the real third-party test library once, shared across backends.
+    lib_c = os.path.join(tmp, "geom.c")
+    import shutil as _sh
+    _sh.copy(os.path.join(fdir, "geom.h"), os.path.join(tmp, "geom.h"))
+    _sh.copy(os.path.join(fdir, "geom.c"), lib_c)
+    lib_a = os.path.join(tmp, "libgeom.a")
+    lib_o = os.path.join(tmp, "geom.o")
+    r = subprocess.run(["gcc", "-c", lib_c, "-o", lib_o], capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        return False, f"building test library failed: {r.stderr[-300:]}"
+    r = subprocess.run(["ar", "rcs", lib_a, lib_o], capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        return False, f"ar failed: {r.stderr[-300:]}"
+
+    struct_dict = os.path.join(fdir, "struct_by_value.dict")
+    addr_dict = os.path.join(fdir, "out_param_address_of.dict")
+    expected_struct = {"c": "distance=5.000000mid_x=1.500000mid_y=2.000000",
+                        "cpp": "distance=5.000000mid_x=1.500000mid_y=2.000000",
+                        "nim": "distance=5.0mid_x=1.5mid_y=2.0"}
+    expected_addr = "result=14severity=1"
+
+    for backend, ext, compiler in (("c", "c", "gcc"), ("cpp", "cpp", "g++")):
+        src_out = os.path.join(tmp, f"struct_{backend}.{ext}")
+        r = subprocess.run([sys.executable, CLI, struct_dict, "--backend", backend,
+                            "--output", src_out],
+                            capture_output=True, text=True, timeout=60, cwd=HERE)
+        if r.returncode != 0:
+            return False, f"[{backend}] struct transpile failed: {(r.stdout + r.stderr)[-300:]}"
+        bin_out = os.path.join(tmp, f"struct_{backend}")
+        r2 = subprocess.run([compiler, "-std=" + ("c11" if backend == "c" else "c++17"),
+                             "-O2", "-I", os.path.join(HERE, "runtime"), src_out,
+                             "-o", bin_out, "-L", tmp, "-lgeom", "-lm"],
+                             capture_output=True, text=True, timeout=60)
+        if r2.returncode != 0:
+            return False, f"[{backend}] struct build failed: {r2.stderr[-400:]}"
+        run = _run(bin_out, timeout=20)
+        out = "".join(run.stdout.split())
+        if out != expected_struct[backend]:
+            return False, f"[{backend}] struct-by-value wrong output: {out!r} (expected {expected_struct[backend]!r})"
+
+        addr_out = os.path.join(tmp, f"addr_{backend}.{ext}")
+        r3 = subprocess.run([sys.executable, CLI, addr_dict, "--backend", backend,
+                            "--output", addr_out],
+                            capture_output=True, text=True, timeout=60, cwd=HERE)
+        if r3.returncode != 0:
+            return False, f"[{backend}] addr transpile failed: {(r3.stdout + r3.stderr)[-300:]}"
+        addr_bin = os.path.join(tmp, f"addr_{backend}")
+        r4 = subprocess.run([compiler, "-std=" + ("c11" if backend == "c" else "c++17"),
+                             "-O2", "-I", os.path.join(HERE, "runtime"), addr_out,
+                             "-o", addr_bin, "-L", tmp, "-lgeom", "-lm"],
+                             capture_output=True, text=True, timeout=60)
+        if r4.returncode != 0:
+            return False, f"[{backend}] addr build failed: {r4.stderr[-400:]}"
+        run2 = _run(addr_bin, timeout=20)
+        out2 = "".join(run2.stdout.split())
+        if out2 != expected_addr:
+            return False, f"[{backend}] out-param wrong output: {out2!r} (expected {expected_addr!r})"
+
+    # Nim: separate toolchain (nim c), same two scenarios.
+    nim_struct_src = os.path.join(tmp, "struct_nim.nim")
+    r = subprocess.run([sys.executable, CLI, struct_dict, "--backend", "nim",
+                        "--output", nim_struct_src],
+                        capture_output=True, text=True, timeout=60, cwd=HERE)
+    if r.returncode != 0:
+        return False, f"[nim] struct transpile failed: {(r.stdout + r.stderr)[-300:]}"
+    nim_struct_bin = os.path.join(tmp, "struct_nim")
+    r2 = subprocess.run(["nim", "c", "--opt:speed", f"--passL:-L{tmp} -lgeom -lm",
+                         "-o:" + nim_struct_bin, nim_struct_src],
+                         capture_output=True, text=True, timeout=90)
+    if r2.returncode != 0:
+        return False, f"[nim] struct build failed: {(r2.stdout + r2.stderr)[-500:]}"
+    run3 = _run(nim_struct_bin, timeout=20)
+    out3 = "".join(run3.stdout.split())
+    if out3 != expected_struct["nim"]:
+        return False, f"[nim] struct-by-value wrong output: {out3!r} (expected {expected_struct['nim']!r})"
+
+    nim_addr_src = os.path.join(tmp, "addr_nim.nim")
+    r3 = subprocess.run([sys.executable, CLI, addr_dict, "--backend", "nim",
+                        "--output", nim_addr_src],
+                        capture_output=True, text=True, timeout=60, cwd=HERE)
+    if r3.returncode != 0:
+        return False, f"[nim] addr transpile failed: {(r3.stdout + r3.stderr)[-300:]}"
+    nim_addr_bin = os.path.join(tmp, "addr_nim")
+    r4 = subprocess.run(["nim", "c", "--opt:speed", f"--passL:-L{tmp} -lgeom -lm",
+                         "-o:" + nim_addr_bin, nim_addr_src],
+                         capture_output=True, text=True, timeout=90)
+    if r4.returncode != 0:
+        return False, f"[nim] addr build failed: {(r4.stdout + r4.stderr)[-500:]}"
+    run4 = _run(nim_addr_bin, timeout=20)
+    out4 = "".join(run4.stdout.split())
+    if out4 != expected_addr:
+        return False, f"[nim] out-param wrong output: {out4!r} (expected {expected_addr!r})"
+
+    return True, "ok -- struct-by-value and out-parameter both correct on c/cpp/nim"
 
 
 if __name__ == "__main__":

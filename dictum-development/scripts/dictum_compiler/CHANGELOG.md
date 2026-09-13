@@ -1,5 +1,54 @@
 # Changelog
 
+## Unreleased — Module-qualified FFI: 5 real bugs across all 3 backends, one root cause (v0.1.55)
+
+Continuing the bug hunt from the previous entry, next off the "still
+open" list: struct-by-value FFI. The first real struct-by-value round
+trip ever run against `generate_import_c.py`'s own recommended output
+shape (shapes and `import from C` wrapped in `module ... end module`)
+found five real bugs, all the same root cause: code assuming a
+Dictum module's shapes/FFI-imports get scope-mangled the same way the
+module's own native actions do. They don't, on any backend.
+
+**C**: `call geom.point_distance` mangled to a symbol that was never
+declared (`geom_point_distance`) — the dotted-name resolver never
+checked FFI-alias status before blind-mangling. **C**: `geom.Point2D`
+emitted as literal, invalid C — the type-name fallback only stripped
+spaces, never dots. **Shared**: `_DICTUM_KIND` was missing every
+fixed-width type alias (`f32`/`f64`/`i8`.../`u8`...) entirely — the
+exact aliases `generate_import_c.py` itself uses for byte-accurate
+struct fields — causing confirmed **undefined behavior**: a real `f32`
+field printed via `%d` produced `mid_x=0` instead of the correct
+`1.500000`, not a cosmetic wrong digit. **C++**: `_ffi_aliases` was
+never populated anywhere in this emitter at all — the C backend's own
+R18 fix never made it here. **C++**: five call sites assumed a Dictum
+module maps to a real C++ namespace (`type_name.replace('.', '::')`);
+no code anywhere ever emits such a namespace, confirmed by a real g++
+error. Nim needed the identical two fixes independently, its own
+module-dot syntax making the bug look like valid Nim right up until
+`nim c` rejected it.
+
+**`generate_import_c.py` itself was stale in the same way Guide A was**
+— its own docstring still claimed Dictum can't take the address of a
+local variable, wrong since `the address of` was added and never
+updated. Fixed the classification (a pointer-to-primitive, including
+an enum-backed bool, is now bound directly, no wrapper) and found a
+second bug fixing the first: the generated guidance for an enum
+out-parameter recommended a nonexistent Dictum type (`'r45_bool'`)
+instead of the real one (`'i32'`) — caught by actually trying to use
+the generated guidance, not by reading the code. Two existing
+regression tests (R23, R45) asserted the old, now-obsolete behavior;
+updated both to the current correct behavior rather than reverting the
+fix to keep them passing.
+
+R108: all fixes verified end-to-end on C, C++, and Nim — struct-by-value
+pass and return, plus an out-parameter bound via `the address of` with
+no hand-written shim — all three backends agreeing on the correct
+output. All proven capable of failing (re-broke each fix, confirmed the
+test catches it) before being restored.
+
+Suite: 109/109 regression, 6/6 behavioral.
+
 ## Unreleased — Reading-loop closures, real C++ class bugs, and the Python/Dictum boundary (v0.1.54)
 
 A real external handoff document named two "if you do only two things"

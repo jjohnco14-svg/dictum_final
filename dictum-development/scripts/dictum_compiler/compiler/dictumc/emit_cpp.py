@@ -521,6 +521,34 @@ class CppEmitter:
                 or t.startswith('growable list of ')
                 or t.endswith(' list') or t.endswith(' array'))
 
+    def _strip_module_qualifier(self, type_name: str) -> str:
+        """A module-qualified shape/type reference (`geom.Point2D`, for a
+        shape declared inside `module geom ... end module`) resolves to
+        the BARE type name, never `geom::Point2D`.
+
+        BUGFIX: five call sites in this file did `type_name.replace('.',
+        '::')` on the theory that a Dictum module maps to a real C++
+        namespace. It doesn't, anywhere in this emitter -- the only real
+        namespace this file ever emits is `self.namespace`, a single
+        whole-PROGRAM `--namespace` CLI option, entirely unrelated to
+        individual `module` blocks. A shape declared inside a module is
+        emitted as a plain top-level `struct Point2D { ... };`, with no
+        wrapping namespace at all (confirmed directly: a real
+        struct-by-value FFI round-trip produced the g++ error `'geom'
+        does not name a type` the moment a caller wrote `geom::Point2D`,
+        because no `namespace geom { ... }` was ever emitted for it to
+        resolve against). This mirrors the equivalent, already-fixed
+        assumption on the C backend (emit_c.py's
+        `_resolve_final_type_name`) and the call-name mangling fix just
+        above (`_ffi_aliases`) -- all three are the same root cause:
+        code that assumed a Dictum module's members are C++-namespaced
+        or otherwise scope-mangled the same way as a module's own
+        native actions, when in fact shapes (on both backends) and FFI
+        aliases (once registered in _ffi_aliases) are not."""
+        if "." in type_name:
+            return type_name.rsplit(".", 1)[-1]
+        return type_name
+
     def type_to_cpp(self, t: str) -> str:
         if t.startswith('unique handle to '):
             return f"std::unique_ptr<{self.type_to_cpp(t[len('unique handle to '):].strip())}>"
@@ -628,7 +656,7 @@ class CppEmitter:
             return self.imported_containers[t]
         base = self.types.get(t, t.replace(" ", "_"))
         if '.' in base:
-            base = base.replace('.', '::')
+            base = self._strip_module_qualifier(base)
         return base
 
 
@@ -773,7 +801,7 @@ class CppEmitter:
         elif isinstance(node, Transmute):
             return f"static_cast<{self.type_to_cpp(node.type)}>({self.expr_to_cpp(node.expr)})"
         elif isinstance(node, NewExpr):
-            type_name = node.type_name.replace('.', '::')
+            type_name = self._strip_module_qualifier(node.type_name)
             args = ", ".join(self.expr_to_cpp(a) for a in node.args)
             if args:
                 return f"std::make_unique<{type_name}>({args})"
@@ -865,7 +893,7 @@ class CppEmitter:
             if _type_sem.is_comparison(node.op): return "bool"
             return lt or self._infer_type_from_expr(node.right)
         if isinstance(node, NewExpr):
-            return f"std::unique_ptr<{node.type_name.replace('.', '::')}>"
+            return f"std::unique_ptr<{self._strip_module_qualifier(node.type_name)}>"
         if isinstance(node, FuncCall):
             dictum_ret = self.action_return_types.get(node.name)
             return self.type_to_cpp(dictum_ret) if dictum_ret is not None else None
@@ -1188,7 +1216,7 @@ class CppEmitter:
             else:
                 # Smart pointer assignment from NewExpr
                 if isinstance(node.value, NewExpr):
-                    type_name = node.value.type_name.replace('.', '::')
+                    type_name = self._strip_module_qualifier(node.value.type_name)
                     args = ", ".join(self.expr_to_cpp(a) for a in node.value.args)
                     if raw_type.startswith('unique handle to '):
                         inner = self.type_to_cpp(raw_type[len('unique handle to '):].strip())
@@ -1250,7 +1278,7 @@ class CppEmitter:
             # Smart pointer reset from NewExpr
             target_type = self.declared_vars.get(node.target, '')
             if isinstance(node.value, NewExpr):
-                type_name = node.value.type_name.replace('.', '::')
+                type_name = self._strip_module_qualifier(node.value.type_name)
                 args = ", ".join(self.expr_to_cpp(a) for a in node.value.args)
                 if target_type.startswith('unique handle to '):
                     inner = self.type_to_cpp(target_type[len('unique handle to '):].strip())
@@ -1539,6 +1567,26 @@ class CppEmitter:
             # could not be cast to the declared type.
             self.imported_actions[node.alias or node.action_name] = (
                 node.params, node.ret_type)
+            # BUGFIX: emit_cpp.py NEVER populated self._ffi_aliases at all
+            # (confirmed: grepping this whole file for the attribute before
+            # this fix found only the READ site in _resolve_call_name,
+            # never a write) -- the C backend's equivalent fix (R18, "the
+            # FFI-alias guard") never made it to this emitter. This meant
+            # a module-qualified call to an `import from C` binding
+            # (`call geom.point_distance ...`, exactly the structure
+            # generate_import_c.py itself recommends -- see Guide A's
+            # generate_import_c.py section) fell straight through
+            # resolve_call_name's dotted-name branch to a blind
+            # `name.replace(".", "_")`, producing `geom_point_distance` --
+            # a symbol that was never declared, since the extern
+            # declaration above is correctly UNMANGLED. Confirmed as a
+            # real, reproducible link failure ("implicit declaration of
+            # function"), not a hypothetical. Registering the alias here
+            # lets resolve_call_name's FFI-alias check (shared with the C
+            # backend) actually fire for C++.
+            if not hasattr(self, '_ffi_aliases'):
+                self._ffi_aliases = set()
+            self._ffi_aliases.add(node.alias or node.action_name)
             return
 
         if isinstance(node, ImportCpp):
@@ -1546,6 +1594,13 @@ class CppEmitter:
                 self.imported_actions[node.alias] = (node.params, node.ret_type)
                 # Same call...giving fix as ImportC/Action above.
                 self.action_return_types[node.alias] = node.ret_type
+                # BUGFIX: same gap as ImportC just above -- `import from
+                # C++` bindings were never registered in _ffi_aliases
+                # either, so a module-qualified call to one hit the same
+                # blind dotted-name mangling.
+                if not hasattr(self, '_ffi_aliases'):
+                    self._ffi_aliases = set()
+                self._ffi_aliases.add(node.alias)
             elif node.item_type == 'container':
                 self.imported_containers[node.alias] = self._map_container(node.item_name)
             return
@@ -1786,8 +1841,27 @@ class CppEmitter:
                     declared = declared[len(prefix):].strip()
                     break
             shape_name = declared or p.obj
+            # BUGFIX (same bug class as the C backend's equivalent fix): a
+            # module-qualified shape type (`keep m as geom.Point2D ...`)
+            # has declared_vars[p.obj] == "geom.Point2D" verbatim, but
+            # self.shapes is keyed by the bare "Point2D" -- shapes are
+            # never module-mangled at their own definition (confirmed: a
+            # `shape Point2D` inside `module geom` still emits plain
+            # `struct Point2D`, no `geom::`/`geom_` prefix on the TYPE
+            # itself, only on actions/imports). Strip the qualification
+            # the same way the call-name fix above does.
+            if '.' in shape_name:
+                shape_name = shape_name.rsplit('.', 1)[-1]
             if shape_name in self.shapes:
                 ft = self.shapes[shape_name].get(p.field, '')
+                # SHARED SEMANTICS first -- covers the fixed-width aliases
+                # (f32/f64/i8.../u8...) the narrower checks below miss
+                # entirely; confirmed as a live bug via a real
+                # struct-by-value FFI round-trip (a real `f32` field
+                # printed with %d -- undefined behavior -- instead of %f).
+                shared = _type_sem.printf_spec(ft)
+                if shared is not None and 'size_t' not in ft:
+                    return shared
                 if 'fractional' in ft or 'decimal' in ft: return "%f"
                 if ft == 'text': return "%s"
             return "%d"

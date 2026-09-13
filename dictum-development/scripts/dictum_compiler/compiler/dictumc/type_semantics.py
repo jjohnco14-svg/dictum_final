@@ -61,6 +61,23 @@ _DICTUM_KIND = {
     "truth value":       BOOLEAN,
     "bool":              BOOLEAN,
     "opaque pointer":    POINTER,
+    # BUGFIX: the fixed-width type aliases (i8/i16/.../u64, f32/f64) are
+    # real, first-class Dictum types -- c_type_map() in type_registry.py
+    # maps every one of them to a real C type, and generate_import_c.py
+    # deliberately EMITS shape fields using exactly these aliases (not
+    # 'whole number'/'fractional number') so a generated shape's memory
+    # layout matches the real C struct byte-for-byte. None of them were
+    # in this table at all, so `kind_of('f32')`/`printf_spec('f32')`
+    # silently returned UNKNOWN/None for every one of them -- confirmed
+    # as a real, live bug via a struct-by-value FFI round-trip: a real
+    # `f32` field's value printed via `%d` (undefined behavior: a float
+    # read where an int was expected), not the correct `%f`. This is a
+    # SHARED table (both emitters, printf formatting, is_numeric/
+    # is_integral) so the fix lands everywhere these aliases are used,
+    # not just the one call site that happened to surface it.
+    "i8":  INTEGER, "i16": INTEGER, "i32": INTEGER, "i64": INTEGER,
+    "u8":  BYTES,   "u16": INTEGER, "u32": INTEGER, "u64": INTEGER,
+    "f32": FLOATING, "f64": FLOATING,
 }
 
 # Generated C/C++ type spellings -> canonical kind. Used when an emitter
@@ -258,12 +275,31 @@ def resolve_call_name(name, *, module_call_map, ffi_aliases, current_module,
     """Resolve a Dictum call name to its target symbol.
 
     Order matters and is the union of both emitters' rules:
-      1. dotted name  -> the module call map (stdlib/FFI table)
-      2. FFI alias    -> verbatim, never renamed (R18)
-      3. same-module sibling / `use`d module action -> Module_action mangling
-      4. otherwise    -> sanitized bare name
+      1. dotted name, suffix is an FFI alias -> the bare alias, VERBATIM (R101-adjacent fix)
+      2. dotted name  -> the module call map (stdlib/FFI table)
+      3. FFI alias    -> verbatim, never renamed (R18)
+      4. same-module sibling / `use`d module action -> Module_action mangling
+      5. otherwise    -> sanitized bare name
     """
     if "." in name:
+        # BUGFIX: a dotted call to an `import from C`/`C++` binding declared
+        # INSIDE a `module ... end module` block (exactly the structure
+        # generate_import_c.py itself emits) used to unconditionally fall
+        # through to `name.replace(".", "_")` -- e.g. `geom.point_distance`
+        # became `geom_point_distance`, a symbol that doesn't exist, since
+        # an FFI extern declaration is (correctly) never module-mangled at
+        # its own declaration site. This silently produced an
+        # `implicit-declaration-of-function` warning and a link failure,
+        # not a silent wrong answer -- but it made generate_import_c.py's
+        # own recommended module-wrapped output pattern simply not work
+        # when called from outside the module, which is the whole point of
+        # generating a module in the first place. Checking the suffix
+        # against ffi_aliases BEFORE the blind-mangle fallback fixes it;
+        # module_call_map (the stdlib table) still takes priority for the
+        # names it actually covers.
+        suffix = name.rsplit(".", 1)[-1]
+        if suffix in (ffi_aliases or ()) and name not in (module_call_map or {}):
+            return suffix
         return module_call_map.get(name, name.replace(".", "_"))
     if name in (ffi_aliases or ()):
         return name

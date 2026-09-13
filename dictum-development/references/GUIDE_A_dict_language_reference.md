@@ -1047,6 +1047,75 @@ and TYPE ... produces RETURN_TYPE as DICTUM_ALIAS`
   prints the real, actual version of whatever `libsqlite3` is
   installed on the machine running it.
 
+**Struct-by-value FFI, and calling a module-scoped FFI binding from
+outside its module — both real, both verified, on all three backends
+[VERIFIED].** `generate_import_c.py` wraps its generated shapes and
+`import from C` lines inside `module <name> ... end module` (see the
+sample it produces below) — and calling into that from outside the
+module (`program main` in the same file, or another file) found five
+real bugs the first time anyone actually did it, all now fixed:
+
+```
+module geom
+    shape Point2D holds
+        x as f32
+        y as f32
+    end shape
+
+    import from C the action point_distance takes Point2D and Point2D produces f32 as point_distance
+    import from C the action point_midpoint takes Point2D and Point2D produces Point2D as point_midpoint
+end module
+
+program main
+    keep a as geom.Point2D with no value
+    set x of a to 0.0
+    set y of a to 0.0
+    keep b as geom.Point2D with no value
+    set x of b to 3.0
+    set y of b to 4.0
+
+    keep d as f32 with value 0.0
+    call geom.point_distance with a and b giving d
+    print the text "distance=" and d
+end program
+```
+Compiled, linked against a real third-party static library, and run
+identically on C, C++, and Nim — R108 in `compiler/run_selftest.py`,
+fixture at `compiler/tests/module_ffi/`.
+
+- **`geom.point_distance` — the module-qualified CALL — resolves to the
+  real, unmangled C symbol `point_distance`, not `geom_point_distance`.**
+  This used to silently mangle to a symbol that was never declared
+  (confirmed: a real link failure, `implicit declaration of function`)
+  on C, C++, AND Nim independently — three separate bugs, one per
+  backend, all the same root cause: module-scoped mangling
+  (`Module_action`, which DOES apply to a module's own native `action`s)
+  was wrongly also applied to an FFI binding's call site, when an FFI
+  binding's real symbol is never module-mangled at its declaration.
+- **`geom.Point2D` — the module-qualified TYPE reference — resolves to
+  the bare shape name `Point2D`, not a mangled or namespaced form.**
+  Same story: a shape's struct/type definition is never module-mangled
+  either, on any backend (confirmed: C emitted the type name completely
+  unchanged and unmangled; C++ genuinely does NOT wrap module members
+  in a real C++ namespace anywhere in the pipeline, despite several call
+  sites assuming it does).
+- **A struct field typed with a fixed-width alias (`f32`, `f64`, `i8`
+  ... `u64` — exactly what `generate_import_c.py` itself emits for
+  byte-accurate layout) now prints correctly.** This was a real,
+  confirmed instance of undefined behavior, not a cosmetic wrong
+  digit: a genuine `f32` field printed via `%d` (the wrong printf
+  conversion for its actual value) produced `mid_x=0` instead of the
+  correct `mid_x=1.500000`.
+
+If you hit anything that looks like this pattern again — a
+module-qualified reference to something works fine unqualified but
+breaks the moment you write `Module.thing` — it is worth checking
+whether the thing in question is genuinely module-scoped (a native
+`action`, which DOES get `Module_` mangling) or externally-bound (a
+shape or an FFI import, which does NOT), since that distinction is
+exactly what all five bugs above got wrong in one direction or the
+other.
+
 **A curated, already-correct set of these exist for you** — don't
 regenerate from scratch if one already exists:
 `compiler/blessed/sqlite3.dict`, `raylib.dict`, `sdl2.dict`,
