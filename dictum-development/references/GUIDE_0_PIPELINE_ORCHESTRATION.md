@@ -28,6 +28,12 @@ Phase 0   Discovery conversation with the person          (this doc, §2)
 Phase 1   Write SOURCE_OF_TRUTH_<project>.md, roadmap       (Guide A §0)
           half — birds-eye view + version-tagged [Rn] claims
              |
+Phase 1b  (only if the project spans more than one language)  (Guide A §0
+          Declare the Language Boundary — which file is        Phase 1b)
+          which language and why, with dictum blocks'
+          exposed actions checked for real against the
+          compiled kernel, not just asserted
+             |
 Phase 2   Append the Guide C Test Manifest to the same       (Guide A §0)
           file — turn each [Rn] into a checkable assertion
              |
@@ -43,15 +49,26 @@ Guide B   Compile for real, classify any failure against     (Guide B,
 Guide C   Run the Phase 2 manifest against the real binary   (Guide C)
           + guide_a_coverage_check.py (every [Rn] has a
           check or an honest known_gaps entry)
+          + guide_a_traceability_check.py (every [Rn] has
+          traceable IMPLEMENTING code, not just a test —
+          catches an orphaned requirement or a typo'd
+          `# implements:` tag)
              |
 Deliver   package_for_client.py (client never receives the    (Guide C's
-          .dict source, only the built artifact + a plain-    packaging
-          English test report)                                 tooling)
+          .dict source, only the built artifact, a plain-      packaging
+          English test report, and — when the build links      tooling)
+          anything — a LICENSES.md disclosing what and
+          flagging a static+copyleft combination specifically)
 ```
 
 Nothing here is new machinery — every step already exists as real,
 gcc-verified tooling (see the SOURCE_OF_TRUTH.md changelog for each
 piece). This document is the map between the pieces, not a new piece.
+`run_pipeline.py --project . --manifest ... --source-of-truth ...`
+runs Guide B, Guide C, coverage, and traceability as one call and
+reports `overall_ok` across all four; `package_for_client.py` is a
+separate, deliberately separate final step that only runs once
+`overall_ok` is true.
 
 **Guide A is not just consulted before authoring — it's an active
 input to Guide B.** Case A detection (§3 below, and Guide B §2) is

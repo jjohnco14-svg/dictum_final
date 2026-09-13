@@ -153,6 +153,18 @@ variable used, off-by-one logic). If you have any way to know or infer
 the intended correct output (the file's own comments, an obvious
 arithmetic identity, a stated goal from context), verify against it.
 
+**Check the structured payload before hand-diagnosing.** `dict_triage.py
+--json`'s `errors` array enriches known recurring mistakes (currently:
+missing `using` on `repeat`, missing `then` on `if`, missing `with text`
+on `produce failure`) with `construct`/`expected`/`got`/`fix` fields
+directly — see `dictumc/structured_errors.py`. When present, use it
+instead of re-deriving the mistake from the raw parser message, which
+is frequently generic enough to be identical across genuinely different
+mistakes (`repeat 4 times` and `if x is greater than 3` both produce
+`"Expected word, got NEWLINE"` with no other information). Absence of
+an enriched field just means this particular mistake isn't in that
+small, curated list yet — fall back to the manual diagnosis below.
+
 ### Case B — the request is too vague to fix confidently
 
 Signs: the `.dict` file (or the surrounding request) doesn't make it

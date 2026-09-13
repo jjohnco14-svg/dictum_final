@@ -1921,3 +1921,298 @@ Three sites needed it — extern declaration, generated wrapper, and the
   untested** (everything verified is C-ABI — see §32f).
 
 Version at time of writing: **0.1.53**.
+
+---
+
+## 33. Reading-loop closures, real C++ class bugs, and the Python/Dictum boundary (v0.1.54)
+
+Prompted by a real external handoff document (`HANDOFF.md`) naming two
+"if you do only two things" priorities plus a longer gap list. Each item
+below follows the same discipline as every prior section: verify against
+the real compiler before writing anything, fix, add a regression test,
+then **deliberately re-break the fix** to prove the new test actually
+catches it before restoring — "a check never observed failing proves
+nothing" applied literally, not just asserted.
+
+### 33a. `dictum vocabulary` — one generated artefact instead of four scattered ones
+
+"What exists" was scattered across `grammar.py` (keywords), `stdlib_registry.py`
+(92 functions), `blessed/manifests/*.json` (10 libraries), and this
+document's own prose — with no machine-readable union, and no way to ask
+"does X exist / what's its signature / is it blessed on target Y" without
+grepping source. `dictum vocabulary [--json]` (`tools/vocabulary.py`)
+answers all three, regenerated fresh from the real registries every call
+— it can never hand-drift from the code because it IS the code. A small,
+explicitly-labeled `common_mistakes` section (mirrored from this same
+list, kept in sync rather than duplicated independently) covers the
+recurring sentence-form gotchas that full grammar introspection doesn't
+reach yet. R99, proven to catch drift by live-cross-checking every count
+against the real registries at test time, not a value baked in when the
+tool was written.
+
+### 33b. Requirement ↔ code traceability — the other half `guide_a_coverage_check.py` never covered
+
+`guide_a_coverage_check.py` already answered "which TEST covers roadmap
+ID Rn." Nothing answered "show me the CODE implementing requirement 3."
+Closed with a `# implements: Rn` comment convention above `program`/
+`action`/`module`/`method` declarations (`#` line comments already
+existed — no grammar change) and `verify/guide_a_traceability_check.py`,
+wired into `run_pipeline.py` as Stage 4. Reports an `[Rn]` with zero
+implementing code, and — the drift-catching half — a construct tagged
+with an `[Rn]` that doesn't exist in the roadmap markdown (a rename/typo).
+R100. Wiring it in surfaced a real bug in `run_pipeline.py` itself: the
+early-return-on-Guide-B-failure path never set a `traceability` key at
+all (a downstream `KeyError`, not a clean `None`) — fixed.
+
+### 33c. Guide A had an actively WRONG claim, not just a stale one
+
+`GUIDE_A_dict_language_reference.md` §13 said outright that there is "no
+address of a local variable / by-reference mechanism anywhere in the
+language" and called it an unworked-around known gap. `the address of X`
+has existed since R83 (§30-era work) specifically to solve this exact
+out-parameter case (`sqlite3_open`'s `sqlite3 **`). An AI reading the old
+text would conclude a real, working, verified feature doesn't exist and
+route around it — worse than a missing entry, since it actively misleads.
+Replaced with the real syntax and a verified example.
+
+Also found: `phrased as` (§32a above) and the Nim stdlib bridge were both
+real, both implemented, and **neither had ever made it into
+`GUIDE_A_dict_language_reference.md` itself** — a doc-sync gap between
+this changelog and the actual syntax reference the AI author consults,
+not a gap in the compiler. Documented now as Guide A §13a (`phrased as`)
+and a new §21 ("Tooling") covering `tools/dictum.py` and the Nim bridge.
+Also extended §11h: the function-*type* annotation (`action taking A as
+T produces T`) was documented, but passing an already-declared action BY
+NAME as a value (actually producing a value of that type — R85) was not.
+
+### 33d. C++ classes/methods — two real bugs, found by the first program ever written against this path
+
+Per §32g's own finding ("real programs find edges generators don't"),
+wrote the first program anywhere in this codebase to exercise
+`shape ... holds` with a constructor. It found two real, independent
+instances of the same bug class — "a check that only knows about its own
+scope, not an outer/inherited one":
+
+1. **`emit_c.py`/`emit_cpp.py`'s Assignment auto-declare heuristic** checks
+   `self.declared_vars`, which never knew about a class's own fields
+   (tracked separately in `self.shapes`). `set id to wid` inside a
+   constructor therefore emitted `int32_t id = wid;` — a FRESH LOCAL
+   SHADOWING the real member — instead of `id = wid;`. Compiled cleanly;
+   the object's field stayed uninitialized (confirmed: printed `id=0`
+   instead of the constructed `id=7`). This is precisely the silent-
+   wrong-answer failure class §31's own framing treats as the real risk,
+   not a crash.
+2. **`validator.py`**, one layer up: a subclass method referencing an
+   INHERITED field was rejected outright ("Use of undeclared variable")
+   because only a class's own fields, never its ancestors', were ever
+   registered into method/constructor/destructor body scope.
+
+Both fixed (`emit_cpp.py` seeds `declared_vars` with own+inherited fields
+for class-body emission, restored after; `validator.py`'s `ShapeDef` now
+tracks `parent` and walks the chain). R101, real fixture at
+`tests/classes/widget.dict` (inheritance, a constructor assigning both an
+own and an inherited field, a method reading both, a destructor). Guide A
+§11a updated from `[TRACED]` to `[VERIFIED]`, and a redundant example
+still using the nonexistent `this` keyword was removed — there is no
+`this`/`self` in this language; field access inside a method body is
+bare, by design.
+
+`virtual`/`override` re-verified while in this area: reserved grammar
+words, `Method`/`Constructor` AST fields, **but no parser rule ever sets
+either** — confirmed by trying `virtual method ...` directly
+(`Expected ('as',), got 'method'`). Not a blocker: every method on a
+class with a parent is already emitted `virtual` regardless, so normal
+polymorphism (a same-named method overriding a parent's) works without
+writing the keyword at all.
+
+### 33e. Generic actions (C++ templates) — verified clean, a real positive result
+
+`takes X as any T ... produces T` is real grammar/parser/emitter
+machinery with **zero existing usage anywhere in the codebase and zero
+Guide A documentation** before this. Unlike §33d, this one had no bug
+waiting: compiled and ran a generic `max_of` action across four real
+instantiations (two `whole number` calls, one `fractional number` call,
+one `text`/string call — confirming real C++ operator-overload/
+lexicographic comparison via `>`, not just numeric types), and confirmed
+both the C and Nim backends clearly refuse a template action
+(`Templates require --backend cpp`) rather than silently mis-compiling.
+R105. Documented as new Guide A §13b. Recording a clean result with the
+same rigor as a bug fix matters as much as recording a bug — it's
+evidence, not an assumption, that this specific surface is safe.
+
+### 33f. `Net.*`/`Thread.*` — verified end to end for the first time
+
+Both were real (POSIX sockets, real pthreads in `runtime/*.h`) and
+covered by a synthetic C-level check in this document's own §2
+BEHAVIORAL TESTS, but no compiled `.dict` PROGRAM had ever exercised
+them — exactly HANDOFF.md's "registered but never verified end-to-end."
+R102: a real client/server exchange over a real loopback TCP socket, the
+server side running on a genuine pthread spawned via `Thread.start` from
+within a compiled `.dict` program, confirmed on C and C++ (Nim correctly
+skipped — `Net.*`/`Thread.*`/`Mutex.*` are honestly among the 52 of 92
+stdlib functions not yet nim-bridged, an already-known gap, not a new
+one). Writing the fixture surfaced a real, standalone language fact
+worth having on record rather than discovering later: there is no
+module-level global-variable syntax at all (`keep X ...` outside any
+program/action is `Unknown top-level 'keep'`, confirmed by trying it),
+and `Thread.start` only takes a zero-parameter action — so nothing in
+the language lets a spawned thread receive arguments or share mutable
+state with its spawner except a real OS-level resource both sides
+independently know how to reach. Not a bug; a real design constraint
+worth knowing before reaching for `Thread.start` expecting closure
+capture.
+
+### 33g. Structured Case A errors — a repair-loop payload, not prose
+
+`dict_triage.py --json` already classified Case A/B/C/D, but a Case A
+error's payload was whatever the parser exception happened to say.
+Confirmed concretely: `repeat 4 times` (missing `using i`) and
+`if x is greater than 3` (missing `then`) produce the IDENTICAL generic
+message `"Expected word, got NEWLINE at line N"` — an AI consuming that
+JSON has a location but has to re-derive the actual mistake from
+scratch, the exact authoring-failure class this project's own history
+(§2 of the originating handoff) names as the top reliability problem.
+`dictumc/structured_errors.py` independently re-examines the OFFENDING
+SOURCE LINE (not the uninformative generic message) against a small,
+curated set of known mistake patterns — mirrors `tools/vocabulary.py`'s
+`common_mistakes`, kept in sync rather than duplicated — and attaches
+`construct`/`expected`/`got`/`fix` alongside (never instead of) the
+original `line`/`message`. Found and fixed a real off-by-one while
+building it: the underlying parser error consistently points ONE LINE
+PAST the actual mistake for both the `repeat` and `if` cases; the
+enrichment checks one line back before giving up and reports the
+corrected line. R103.
+
+### 33h. License/attribution tracking for linked libraries
+
+Nothing tracked license obligations for the 10 blessed libraries — a
+real, cheap-to-fix-now legal exposure. Added a web-search-VERIFIED (not
+memory-asserted) SPDX license id, a copyleft flag, and a short note to
+every `blessed/manifests/*.json` (OpenSSL 3.0+ confirmed relicensed to
+Apache-2.0; SQLite's exact SPDX id is literally `blessing`, not a
+generic public-domain label — caught and fixed a typo of exactly that
+kind before it shipped; glibc/libm confirmed LGPL-2.1-or-later, where
+STATIC linking, not dynamic, is the real legal distinction).
+`verify/license_report.py` raises exactly one warning — a copyleft
+library that is statically linked — never a blanket flag on every
+GPL-family name regardless of whether it creates a real obligation.
+Wired into `package_for_client.py`: a client deliverable gets a
+`LICENSES.md` when it links anything (omitted, not an empty table, when
+it links nothing), and `package()` surfaces `static_copyleft_risk` in
+its own return value plus a stderr warning at packaging time. R104,
+covering all four real cases (no libraries / permissive library /
+static+copyleft / unknown library) through actual packaged zip contents.
+
+### 33i. Python-orchestrates/Dictum-verifies — `dictum emit-binding` and the Language Boundary format
+
+The reframing that dissolves the "Dictum has to win the whole
+application" problem: Dictum doesn't have to be the best choice for an
+entire program, only for the part where a wrong answer is expensive.
+Python handles orchestration/I/O/AI glue (no C/C++-class memory-safety
+risk, and its ecosystem wins there outright); Dictum owns the logic that
+must be verified and byte-reproducible; C/C++ via `import from C`/`C++`
+handles device/library access. No Python backend, none planned — this is
+a protocol/tooling decision, not a compiler feature.
+
+**The real risk was reproduced before building anything**, not assumed:
+a hand-written `ctypes` binding for a real Dictum kernel
+(`calculate_tariff(weight_kg, distance_km, rate_class)`) with
+`weight_kg`/`distance_km` SWAPPED at the call site. Both are `c_double`,
+so `ctypes` accepts it without complaint — the call ran and silently
+returned **112.8 instead of the correct 14.25**. No crash, no warning.
+The exact silent-wrong-answer failure class §31's framing names as the
+real risk, now demonstrated at the Python/Dictum ABI boundary
+specifically, not just inside the compiler.
+
+`tools/emit_binding.py` (`dictum emit-binding`) closes it: `argtypes`/
+`restype` are pulled from the SAME `type_registry.py` table the C/C++
+emitters use (can never hand-drift), and the generated Python wrapper
+functions are KEYWORD-ONLY — the actual fix, not a convenience. The same
+swap attempted through the generated binding is either a self-evidently
+correct named call or a hard `TypeError`; there is no third, silently-
+wrong outcome left. Scope is deliberately narrow and refuses cleanly
+(never guesses): plain scalar types plus `text` as a parameter only —
+`text` as a RETURN type, `opaque pointer`, containers, and generic
+actions are all refused per-action with a named reason, since a `text`
+return's ownership/lifetime hasn't been verified end-to-end and getting
+an ABI tool's OWN output subtly wrong is worse than refusing.
+
+New Guide A §0 "Phase 1b — the language boundary": a `## Language
+Boundary` / `### block: NAME` SOURCE_OF_TRUTH format
+(`language:`/`file:`/`exposes:`/`rationale:`/`verified_by:`) that makes
+"which language, and why" reviewable instead of a vibe.
+`verify/language_boundary_check.py` makes `exposes:` a checked claim, not
+prose — it reuses `emit_binding.py`'s OWN action-collection/scope logic
+(never a second implementation that could quietly diverge) to confirm
+every named action really exists and is really bindable. R106/R107,
+covering the full real workflow end-to-end (`.dict` → `gcc -shared` →
+generated binding → imported and called from a real Python process,
+producing the exact correct 14.25) plus the negative case (an `exposes:`
+claim naming a nonexistent action, caught by name). A full worked example
+lives at `tests/polyglot/pricing_example/`. Documented as a practical,
+example-driven skill guide (`references/GUIDE_POLYGLOT_python_orchestration.md`),
+separate from — and explicitly not built on — the unwired, untested
+`dictumc/polyglot_*.py` code from this project's very first commit,
+which pursues a much heavier gRPC/multi-backend vision that was never
+integrated into the real pipeline.
+
+### 33j. Honest notes
+
+- **Two independently-discovered bugs this pass were the same shape**
+  (§33d): a scope-tracking structure that only knew about the current/
+  local scope, not an outer/inherited one. Worth grep-checking for the
+  same shape elsewhere the next time a "declared_vars"/"known fields"
+  style structure gets extended to a new context.
+- **A clean verification result (§33e) is exactly as much work to earn
+  honestly as a bug fix, and it's tempting to skip the rigor once
+  nothing looks wrong.** The templates test still needed a real 4-way
+  instantiation, a real cross-backend refusal check, and a real proof-
+  of-failure — not just "it compiled."
+- **Doc staleness isn't always symmetric.** Guide A had one entry that
+  was simply missing (Nim bridge, tooling) and one that was actively
+  WRONG in the opposite direction (address-of) — the second is strictly
+  worse, since it doesn't just fail to help, it actively misdirects.
+- **The license gap (§33h) was never going to be found by compiling
+  more programs.** It needed someone to think to ask "what license is
+  attached to what we're linking," which is a different kind of gap
+  than a compiler bug — worth remembering that "run more real programs"
+  doesn't cover every risk category this project has.
+
+### 33k. Still open
+
+- **No reliable edge-discovery process for the compiler itself** — still
+  the single most-named gap. The evidence so far (§32g, §33d/e) argues
+  for continuing to write real programs against untested feature
+  combinations rather than building another automated generator; fuzzing
+  has empirically saturated (5,627 clean rounds) while hand-written
+  programs keep finding real bugs.
+- **8 reserved stdlib families unimplemented** (`LLM.*`, `Robot.*`,
+  `Speech.*`); **Nim stdlib bridge covers 40 of 92** — unchanged this
+  pass, confirmed still accurate via `dictum vocabulary`'s own
+  `nim_available` field rather than re-asserted from memory.
+- **`emit_c.py`/`emit_cpp.py` remain hand-written twins** — a standing
+  drift risk, not closed by this pass (§33d's bugs are a fresh instance
+  of exactly this risk materializing).
+- **`text` as an `emit-binding` return type is refused, not solved** —
+  needs a real, verified pass over every code path that can produce a
+  `text` return before it's safe to bind (see §33i).
+- **No `--shared`/`.so`-output flag on `dictumc_cli.py` itself** — the
+  Python-orchestration workflow (§33i) currently needs a manual
+  `gcc -shared` step; a first-class `dictum build --shared` would close
+  the gap between "the generated C is ctypes-safe" and "there's a
+  one-command way to get there."
+- **Multi-file `import_c`/`import_cpp` across all three backends
+  together has never been stress-tested** — flagged, not attempted this
+  pass.
+- **Struct-by-value FFI, and the `Http.*`/`Json.*` stdlib families, have
+  never been verified end-to-end on C or C++** — `libclang`-generated
+  struct shapes are trusted by construction (§32f) but not exercised by
+  a hand-written program the way classes/templates/Net/Thread now have
+  been.
+- **No autonomous spec→verified-code loop; Kaggle runs still can't be
+  monitored from the tooling side** — unchanged from §31i/§32g.
+- **The full Guide A/B/C → single-skill-bundle redesign is not done** —
+  this pass fixed staleness and factual errors inside the existing
+  three-document structure; it did not restructure them.
+
+Version at time of writing: **0.1.54**.

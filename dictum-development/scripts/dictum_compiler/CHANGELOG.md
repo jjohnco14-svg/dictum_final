@@ -1,5 +1,104 @@
 # Changelog
 
+## Unreleased — Reading-loop closures, real C++ class bugs, and the Python/Dictum boundary (v0.1.54)
+
+A real external handoff document named two "if you do only two things"
+priorities plus a longer gap list. All of it addressed with the same
+discipline as every entry below: verify against the real compiler
+first, fix, add a regression test, then deliberately re-break the fix
+to prove the new test actually catches it before restoring.
+
+**`dictum vocabulary`** unifies grammar keywords, all 92 stdlib
+signatures (with live per-backend status), and all 10 blessed
+libraries' bindings into one artefact regenerated fresh from the real
+registries every call — previously scattered across four places with
+no machine-readable union. R99.
+
+**Requirement ↔ code traceability** closes the half `guide_a_coverage_check.py`
+never covered: "show me the code implementing requirement 3." A
+`# implements: Rn` comment convention (no grammar change — `#` line
+comments already existed) plus `verify/guide_a_traceability_check.py`,
+wired into `run_pipeline.py` as Stage 4. Catches an `[Rn]` with no
+implementing code, and a construct tagged with an `[Rn]` that doesn't
+exist (a rename/typo). R100. Found a real bug wiring it in:
+`run_pipeline.py`'s early-return-on-Guide-B-failure path never set a
+`traceability` key at all.
+
+**Guide A had an actively WRONG claim, not a stale one** — it said
+outright that there is no address-of/by-reference mechanism in the
+language. `the address of X` has existed since R83 specifically to
+solve this. Fixed, along with two real doc-sync gaps (`phrased as` and
+the Nim stdlib bridge were both real and both undocumented in Guide A
+despite being changelogged here already) and one incomplete entry
+(§11h documented the function-TYPE annotation but not passing an
+action BY NAME as a value).
+
+**C++ classes/methods — two real bugs**, found by the first program
+ever written against this path (a constructor). A constructor's
+`set id to wid` silently declared a fresh LOCAL shadowing the real
+class field instead of assigning it — compiled cleanly, field stayed
+uninitialized (`id=0` instead of `7`, no crash, no warning). The exact
+same bug class one layer up: a subclass method reading an INHERITED
+field was rejected outright, since only a class's own fields were ever
+registered into method/constructor/destructor scope. Both fixed. R101.
+Guide A §11a upgraded `[TRACED]` → `[VERIFIED]`; a redundant example
+still using the nonexistent `this` keyword (there is no `this`/`self`
+in this language) was removed.
+
+**Generic actions (C++ templates) — verified clean.** Real grammar/
+parser/emitter machinery with zero existing usage anywhere and zero
+Guide A documentation. Unlike classes, no bug was waiting: compiled and
+ran a generic `max_of` across whole-number, fractional-number, and
+TEXT instantiations (real lexicographic `>`, not just numeric), and
+confirmed C/Nim both clearly refuse a template action rather than
+silently mis-compiling it. R105. A clean result recorded with the same
+rigor as a bug fix.
+
+**`Net.*`/`Thread.*` verified end-to-end for the first time.** Real
+POSIX sockets, real pthreads — previously covered only by a synthetic
+C-level check, never by a compiled `.dict` program. R102: a real
+client/server exchange over loopback, the server on a genuine pthread
+spawned via `Thread.start`, confirmed on C and C++. Surfaced a real
+language fact: no module-level global-variable syntax exists at all,
+and `Thread.start` takes zero parameters, so nothing lets a spawned
+thread share mutable state with its spawner except a real OS resource
+both sides independently reach.
+
+**Structured Case A errors — a repair-loop payload, not prose.**
+`repeat 4 times` (missing `using i`) and `if x is greater than 3`
+(missing `then`) produced the IDENTICAL generic parser message before
+this — nothing to act on beyond re-deriving the mistake from scratch.
+`dictumc/structured_errors.py` re-examines the offending source line
+against known patterns and attaches `construct`/`expected`/`got`/`fix`
+alongside the original message. R103. Found and fixed a real off-by-
+one along the way: the underlying parser error consistently points one
+line PAST the real mistake.
+
+**License/attribution tracking for linked libraries.** All 10 blessed
+manifests now carry a web-search-VERIFIED SPDX license id (OpenSSL
+3.0+ confirmed Apache-2.0; SQLite's real SPDX id is literally
+`blessing`; glibc/libm confirmed LGPL-2.1-or-later). `verify/license_report.py`
+raises exactly one warning — copyleft AND statically linked — never a
+blanket flag regardless of link mode. `package_for_client.py` now
+ships a `LICENSES.md` when a build links anything. R104.
+
+**Python-orchestrates/Dictum-verifies made real and checkable.** The
+risk was reproduced before anything was built: a hand-written `ctypes`
+binding with two same-typed arguments swapped at the call site
+silently returned 112.8 instead of the correct 14.25 — no crash, no
+warning. `dictum emit-binding` closes it: argtypes pulled from the
+compiler's own type registry, keyword-only Python wrappers that turn
+the same swap into either a visible correct call or a hard `TypeError`.
+New Guide A §0 "Phase 1b" gives projects a `## Language Boundary`
+format (`language:`/`file:`/`exposes:`/`rationale:`/`verified_by:`),
+and `verify/language_boundary_check.py` makes `exposes:` a checked
+claim by reusing `emit_binding.py`'s own scope logic. R106/R107, full
+real workflow end-to-end plus the negative case. Documented as a
+practical skill guide, explicitly not built on the unwired, untested
+`dictumc/polyglot_*.py` legacy code from the first commit.
+
+Suite: 108/108 regression, 6/6 behavioral.
+
 ## Unreleased — R98: C callbacks from Dictum now work; the C++ path was ABI-broken
 
 Prompted by a fair challenge — "isn't `import_c` more than CLI?" — the real
