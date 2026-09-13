@@ -1164,6 +1164,14 @@ in `compiler/run_selftest.py`.
 - This lowers to an ordinary call at the AST level — **zero emitter
   changes were needed for any backend** — so it can never become a
   fourth place backend drift can hide.
+- **Works across a file boundary** — a dictation declared inside a
+  `module ... end module` in one file resolves correctly when called
+  from a separate file via `use` [VERIFIED]. This needed a real,
+  separate fix (project-wide phrase-table propagation at parse time,
+  not just emit time) — dictation registration is a pure parser side
+  effect that never touches the AST, so it needed its own propagation
+  mechanism distinct from how shapes/actions/FFI aliases cross files.
+  See `compiler/tests/multifile_dictation/` for a working example.
 - Use this for FFI bindings you'll call often enough that the raw
   `call ... with ... giving ...` form would otherwise be the only
   non-natural-language-reading part of an otherwise natural-language

@@ -1,0 +1,3 @@
+module mathlib
+    import from C the action abs takes whole number produces whole number as c_abs phrased as "the magnitude of {}"
+end module

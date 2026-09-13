@@ -530,6 +530,13 @@ def build_project(
     # story -- this is the project-wide collection half of that fix,
     # mirroring project_module_actions immediately above it.
     project_ffi_aliases: set = set()
+    # BUGFIX (dictations -- `phrased as` -- never propagated across files):
+    # see the matching comment in transpiler.py's StdlibTranspiler.run()
+    # for the full story. Collected the same way project_ffi_aliases is,
+    # from each file's pre-pass result (which now exposes its own parser's
+    # `_phrases` table), merged project-wide, then seeded into every real
+    # per-file parse below.
+    project_phrases: Dict[str, list] = {}
 
     for fi in sorted_info:
         try:
@@ -577,6 +584,12 @@ def build_project(
                     elif isinstance(_n, _Module):
                         _collect_ffi_aliases(_n.body)
             _collect_ffi_aliases(r_pre['ast'])
+        except Exception:
+            pass
+
+        try:
+            for _first_word, _entries in (r_pre.get('phrases') or {}).items():
+                project_phrases.setdefault(_first_word, []).extend(_entries)
         except Exception:
             pass
 
@@ -752,7 +765,8 @@ def build_project(
             result = t.run(validate=True, extra_shapes=project_shapes, extra_actions=project_actions,
                             extra_local_modules=project_modules, extra_module_actions=project_module_actions,
                             extra_import_return_types=project_import_return_types,
-                            extra_ffi_aliases=project_ffi_aliases)
+                            extra_ffi_aliases=project_ffi_aliases,
+                            extra_phrases=project_phrases)
         except (SyntaxError, ValidationError) as e:
             errors.append({'file': rel, 'message': str(e), 'line': 0})
             continue

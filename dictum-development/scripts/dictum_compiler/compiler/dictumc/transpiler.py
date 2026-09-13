@@ -248,7 +248,8 @@ class StdlibTranspiler(Transpiler):
             extra_local_modules: Optional[set] = None,
             extra_module_actions: Optional[Dict[str, set]] = None,
             extra_import_return_types: Optional[Dict[str, str]] = None,
-            extra_ffi_aliases: Optional[set] = None) -> Dict[str, Any]:
+            extra_ffi_aliases: Optional[set] = None,
+            extra_phrases: Optional[Dict[str, list]] = None) -> Dict[str, Any]:
         from .stdlib_registry import (
             DICTUM_STDLIB_TYPES, STDLIB_ACTION_FAMILIES,
             extend_validator, extend_emitter, detect_stdlib_includes,
@@ -262,6 +263,25 @@ class StdlibTranspiler(Transpiler):
         tokens = lexer.tokenize()
         grammar = DictumGrammar(cpp_mode=(self.backend == 'cpp'), strict=True) if grammar_guided else None
         parser = Parser(tokens, grammar=grammar)
+        # BUGFIX (dictations -- `phrased as` -- never propagated across
+        # files): `_register_phrase` stores every dictation on `self._phrases`
+        # of the Parser instance PARSING THAT ONE FILE, and the phrase
+        # template is never written into the AST at all -- so a sibling
+        # file's parser has no way to know a dictation exists, project-wide
+        # pre-pass or not, because there was nothing in the AST for a
+        # pre-pass to walk. Confirmed with a real multi-file project: a
+        # dictation declared in mathlib.dict and called from main.dict
+        # failed outright ("Unknown 'the' expression: magnitude") --
+        # the EXACT same "state that should be project-wide was only
+        # ever local to the thing that declared it" pattern as every
+        # other multi-file bug this session, one layer earlier (parse
+        # time, not emit time). Seed this file's parser with the
+        # project-wide phrase table BEFORE parsing its own body -- a
+        # genuine same-file `phrased as` declaration still adds to this
+        # same dict as it's parsed, same "seed first, real declarations
+        # still take effect on top" pattern as extra_ffi_aliases.
+        if extra_phrases:
+            parser._phrases = {k: list(v) for k, v in extra_phrases.items()}
         ast = parser.parse()
         ast = auto_inject_stdlib_imports(ast)
         stdlib_headers, needs_robotics = detect_stdlib_includes(ast)
@@ -398,6 +418,11 @@ class StdlibTranspiler(Transpiler):
             "needs_robotics": needs_robotics,
             "makefile": emitter.get_makefile() if hasattr(emitter, 'get_makefile') else None,
             "ldflags": emitter.get_ldflags() if hasattr(emitter, 'get_ldflags') else ["-lm"],
+            # See the extra_phrases fix above: this file's OWN dictations
+            # (declared here, whether or not it also received seeded ones),
+            # so a project-wide pre-pass can collect them for every OTHER
+            # file to seed from in turn.
+            "phrases": getattr(parser, "_phrases", {}),
         }
 
         if summary:

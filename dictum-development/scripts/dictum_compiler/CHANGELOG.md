@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased — Multi-file dictations (`phrased as`): a different root cause than every other multi-file bug (v0.1.58)
+
+Prompted directly by a user question about the Python orchestration
+boundary, which led to a more fundamental one: does `phrased as` even
+work across a file boundary? It didn't.
+
+Every other multi-file bug this session (the original nine-bug
+cluster, plus R108 and R110) shared one shape: an AST-derivable fact
+was correctly present in its declaring file, but no project-wide
+pre-pass made it visible to siblings. This one is different: dictation
+registration is a pure parse-time side effect that never touches the
+AST at all — `phrased as "..."` gets consumed and applied to that
+one Parser instance's internal table, then is gone. A pre-pass that
+only walks ASTs (the pattern that fixed every earlier bug) had nothing
+to walk here. Confirmed directly: a dictation declared in one file and
+called from another failed outright with "Unknown 'the' expression."
+
+Fixed by having `StdlibTranspiler.run()` expose each file's own parsed
+phrase table in its result, collecting it project-wide the same way
+FFI aliases already are, and seeding it into each file's Parser
+instance BEFORE that file's own parse begins (dictations must exist
+by the time the parser reaches a line using one — this is a parse-time
+fix, not an emit-time one like the others).
+
+R111: the real cross-file dictation resolves and computes correctly
+on both C and C++. Proven capable of failing (removed the wiring,
+confirmed the test catches it, restored).
+
+Also raised in the same conversation, flagged but not yet built: a
+project-level "what dictations exist" discovery tool — distinct from
+this fix, which makes dictations correctly resolve, not discoverable
+without already knowing they're there.
+
+Suite: 112/112 regression, 6/6 behavioral.
+
 ## Unreleased — Multi-file `import from C`: R108 didn't survive crossing a file boundary (v0.1.57)
 
 The last item explicitly named "never stress-tested": a shape + FFI

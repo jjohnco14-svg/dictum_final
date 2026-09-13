@@ -6678,6 +6678,70 @@ def test_r110_multifile_ffi(tmp):
     return True, "ok -- struct-by-value + out-parameter, module in one file called from another, correct and identical on c/cpp/nim"
 
 
+@regression("R111 multi-file dictations (`phrased as`) -- a dictation "
+            "declared in one file (inside `module ... end module`, "
+            "wrapping an `import from C` binding) never worked when "
+            "called from a SEPARATE file via `use`. Root cause different "
+            "from every other multi-file bug this session (R11-R19, "
+            "R108, R110): `_register_phrase` stores each dictation on "
+            "`self._phrases` of the PARSER instance parsing that one "
+            "file, and the phrase template is never written into the "
+            "AST at all -- so there was nothing for a project-wide "
+            "AST-walking pre-pass to even collect, unlike shapes/actions/"
+            "ffi_aliases, which all live in the AST. Confirmed directly: "
+            "`the magnitude of 0 minus 42` in a caller file failed "
+            "outright with \"Unknown 'the' expression: magnitude\", even "
+            "though the identical dictation works fine within its own "
+            "declaring file. Fixed by having StdlibTranspiler.run() "
+            "expose each file's OWN parsed `_phrases` table in its result "
+            "dict, collecting it project-wide the same way "
+            "project_ffi_aliases is (project_phrases in "
+            "project_builder.py), and seeding a NEW extra_phrases "
+            "parameter into each file's Parser instance BEFORE that "
+            "file's own parse begins (not after, unlike the emitter-"
+            "level fixes -- dictations must exist before the parser "
+            "reaches the line that uses one). Verifies the real dictation "
+            "resolves and computes the correct answer (`abs=42`) when "
+            "declared in one file and called from another, on both C and "
+            "C++")
+def test_r111_multifile_dictation(tmp):
+    fdir = os.path.join(HERE, "tests", "multifile_dictation")
+    for fname in ("mathlib.dict", "main.dict"):
+        if not os.path.exists(os.path.join(fdir, fname)):
+            return False, f"tests/multifile_dictation/{fname} missing"
+
+    import shutil as _sh
+    for backend, ext, compiler in (("c", "c", "gcc"), ("cpp", "cpp", "g++")):
+        proj = os.path.join(tmp, f"proj_{backend}")
+        os.makedirs(proj)
+        for fname in ("mathlib.dict", "main.dict"):
+            _sh.copy(os.path.join(fdir, fname), os.path.join(proj, fname))
+        out_dir = os.path.join(proj, "build")
+        r = subprocess.run([sys.executable, PROJECT_BUILDER, proj, "--backend", backend,
+                            "--out", out_dir],
+                            capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            return False, f"[{backend}] project_builder.py failed: {(r.stdout + r.stderr)[-400:]}"
+        std = "c11" if backend == "c" else "c++17"
+        main_src = os.path.join(out_dir, "main." + ext)
+        lib_src = os.path.join(out_dir, "mathlib." + ext)
+        bin_out = os.path.join(out_dir, "demo")
+        rc = subprocess.run([compiler, "-std=" + std, "-O2", "-I", out_dir,
+                             "-I", os.path.join(HERE, "runtime"), main_src, lib_src,
+                             "-o", bin_out, "-lm"],
+                             capture_output=True, text=True, timeout=60)
+        if rc.returncode != 0:
+            return False, f"[{backend}] build failed: {rc.stderr[-400:]}"
+        run = _run(bin_out, timeout=20)
+        if run.returncode != 0:
+            return False, f"[{backend}] runtime failure (exit {run.returncode}): {run.stdout!r}"
+        out = "".join(run.stdout.split())
+        if out != "abs=42":
+            return False, f"[{backend}] wrong output: {out!r} (expected 'abs=42')"
+
+    return True, "ok -- cross-file dictation correctly resolved and computed on c and cpp"
+
+
 if __name__ == "__main__":
     sys.exit(main())
 

@@ -2585,3 +2585,78 @@ failure on C++; restored both.
   has tried yet, not to manufacture a new list from nothing.
 
 Version at time of writing: **0.1.57**.
+
+---
+
+## 37. Multi-file dictations (`phrased as`) — a different root cause than every other multi-file bug (v0.1.58)
+
+Prompted directly by a user question about extending the Python
+orchestration boundary, which led to the more fundamental question:
+does `phrased as` even work across a file boundary at all? It did not
+— found and fixed the same session it was asked about.
+
+### 37a. The bug, and why it's architecturally different from R11–R19/R108/R110
+
+Every other multi-file bug this session (R11–R19, R108, R110) shared
+one shape: some AST-derivable fact (a shape, an action, an FFI alias)
+was correctly present in the file that declared it, but a project-wide
+pre-pass had to be added to walk every file's AST and make that fact
+visible to siblings. This one is different in a way worth naming
+explicitly: **`_register_phrase` never puts the dictation into the AST
+at all.** It's a pure parse-time side effect — `phrased as "the
+magnitude of {}"` is consumed by the parser, registered onto
+`self._phrases` of that one Parser instance, and then gone; nothing
+downstream (validator, emitter, or a project-wide pre-pass walking the
+resulting AST) has any way to know it happened. A pre-pass that only
+walks ASTs — the pattern that fixed every earlier multi-file bug this
+session — had nothing to walk here.
+
+Confirmed directly: a dictation declared in `mathlib.dict` (wrapping
+an `import from C` binding, inside `module mathlib`) and called from
+`main.dict` via `use mathlib` failed outright: `Unknown 'the'
+expression: magnitude`. The identical dictation works perfectly within
+its own declaring file — cross-file is where it breaks.
+
+### 37b. The fix
+
+`StdlibTranspiler.run()` now exposes each file's own parsed `_phrases`
+table in its result dict (`result["phrases"]`) — surfacing the
+side-effect state that used to just evaporate. `project_builder.py`'s
+existing pre-pass (already walking every file once to collect shapes/
+actions/ffi_aliases) now also merges each file's `phrases` into a
+project-wide `project_phrases` dict, exactly the way `project_ffi_aliases`
+already works. The one genuine wrinkle: seeding has to happen **before**
+a file's own parse (`parser._phrases = {...}` right after constructing
+the Parser, before `.parse()` is called), not after like every
+emitter-level fix — a dictation has to already exist in the phrase
+table by the time the parser reaches the line that calls it, since
+recognizing `the magnitude of ...` as a statement at all happens
+during parsing, not emission. A new `extra_phrases` parameter carries
+this from `project_builder.py` into `transpiler.py`.
+
+### 37c. Verification
+
+R111: the real fixture (`tests/multifile_dictation/` — `mathlib.dict`
+declaring the dictation, `main.dict` calling it) resolves and computes
+the correct answer (`abs=42`) on both C and C++. Proven capable of
+failing: removed the `extra_phrases` wiring, confirmed R111 catches
+the exact "Unknown 'the' expression" failure, restored.
+
+### 37d. Also raised, not yet built: a discoverable, project-wide dictation registry
+
+The same conversation raised a second, related, and still-open
+question: right now there is no way to ask "what dictations does this
+project define" without reading every `.dict` file by hand — no
+equivalent of `dictum vocabulary` (which covers the COMPILER's own
+built-in keywords/stdlib/blessed-library vocabulary) for a project's
+own user-authored `phrased as` declarations. This is a real, distinct
+gap from 37a/37b: 37b makes dictations correctly *resolve* across
+files; it does not make them *discoverable* without already knowing
+they exist. A natural design (not yet built): a project-level
+`dictum dictations <project_dir>` tool, in the same family as
+`verify/language_boundary_check.py`/`guide_a_traceability_check.py`
+(project introspection, not compiler-registry introspection), listing
+every declared dictation, its target action, and which file declares
+it — flagged here as a concrete next step, not implemented this pass.
+
+Version at time of writing: **0.1.58**.

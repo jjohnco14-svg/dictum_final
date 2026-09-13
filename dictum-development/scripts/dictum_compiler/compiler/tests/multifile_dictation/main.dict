@@ -1,0 +1,7 @@
+use mathlib
+
+program main
+    keep m as whole number with value 0
+    the magnitude of 0 minus 42 giving m
+    print the text "abs=" and m
+end program
